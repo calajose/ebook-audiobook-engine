@@ -21,6 +21,24 @@ Developed in [OpenCode](https://opencode.ai) with Gemini and free AI models.
 
 - Prosodia de frases muy cortas e interrogativas pendiente de mejora.
 
+## How Kokoro TTS works
+
+This project uses [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx)
+as an external dependency — the TTS inference engine is **not** bundled in this
+repository.
+
+| Component | Source | Location |
+|-----------|--------|----------|
+| `kokoro-onnx` (inference runtime) | PyPI | installed via `pip install` |
+| Model files (~337 MB) | GitHub releases | `~/.cache/ebook-audiobook-engine/kokoro/` |
+| Backend adapter | This repo | `src/.../tts/kokoro/` |
+
+On first synthesis, the engine downloads two model files (~310 MB + ~27 MB)
+from the
+[kokoro-onnx releases](https://github.com/thewh1teagle/kokoro-onnx/releases)
+and caches them locally. No internet connection is needed after the initial
+download.
+
 ## Overview
 
 Converts ebooks (EPUB, TXT) into audiobooks (M4B/WAV) through a local
