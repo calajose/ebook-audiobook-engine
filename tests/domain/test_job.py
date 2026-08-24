@@ -33,6 +33,11 @@ class TestAudiobookJob:
         assert job.id
         assert job.completed_segments == 0
         assert job.total_segments == 0
+        assert job.speed == 1.0
+        assert job.paragraph_pause_ms == 700
+        assert job.chapter_pause_ms == 2500
+        assert job.scene_break_pause_ms == 1500
+        assert job.chapter_title_pause_ms == 1200
 
     def test_valid_transition_created_to_analyzing(self) -> None:
         job = AudiobookJob()

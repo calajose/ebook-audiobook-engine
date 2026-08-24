@@ -64,10 +64,41 @@ def remove_noise(text: str) -> str:
     return "\n".join(cleaned)
 
 
+def normalize_dialogue(text: str) -> str:
+    """Normalize dialogue markers, quotes, and punctuation for TTS.
+
+    - Converts guillemets (« ») and curly quotes to standard quotes
+    - Normalizes Spanish dialogue dashes (- / –) to em-dash (—)
+    - Fixes spacing around inverted marks (¿, ¡)
+    - Standardizes ellipsis (... / …)
+    """
+    # Normalize guillemets and curly double quotes
+    text = text.replace("«", '"').replace("»", '"')
+    text = text.replace("“", '"').replace("”", '"')
+    text = text.replace("‘", "'").replace("’", "'")
+
+    # Normalize dialogue dashes at the start of a line/paragraph
+    text = re.sub(r"(?m)^[-–]\s*", "— ", text)
+    # Normalize dialogue dashes in incises/tags
+    text = re.sub(r"\s+[-–]\s+", " — ", text)
+    text = re.sub(r"\s+[-–]([.!?])", r" —\1", text)
+
+    # Normalize spaces after inverted question/exclamation marks
+    text = re.sub(r"¿\s+", "¿", text)
+    text = re.sub(r"¡\s+", "¡", text)
+
+    # Normalize ellipsis
+    text = re.sub(r"\.{3,}", "...", text)
+    text = re.sub(r"(?:\.\s+){2,}\.", "...", text)
+
+    return text
+
+
 def normalize(text: str) -> str:
     """Apply full normalization pipeline to text."""
     text = normalize_whitespace(text)
     text = remove_noise(text)
+    text = normalize_dialogue(text)
     # Final cleanup: strip each line and remove empty leading/trailing lines
     lines = text.splitlines()
     lines = [ln.strip() for ln in lines]

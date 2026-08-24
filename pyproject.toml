@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ebook-audiobook-engine"
-version = "0.1.0"
+version = "0.2.0a0"
 description = "Local audiobook-conversion engine with pluggable TTS backends"
 readme = "README.md"
 license = "MIT"
@@ -59,7 +59,7 @@ select = [
 ]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

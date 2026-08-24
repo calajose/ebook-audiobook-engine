@@ -70,6 +70,13 @@ class AudiobookJob:
     language: str = ""
     voice: str = ""
 
+    # Prosody & pauses
+    speed: float = 1.0
+    paragraph_pause_ms: int = 700
+    chapter_pause_ms: int = 2500
+    scene_break_pause_ms: int = 1500
+    chapter_title_pause_ms: int = 1200
+
     # Paths
     work_dir: Path | None = None
     output_path: Path | None = None

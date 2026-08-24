@@ -51,6 +51,7 @@ class FakeTTSBackend:
         language: str,
         voice: str,
         output_path: Path,
+        speed: float = 1.0,
     ) -> None:
         _make_fake_wav(output_path)
 

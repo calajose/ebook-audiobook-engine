@@ -61,3 +61,15 @@ class BackendCapabilities:
 
     languages: tuple[Language, ...] = field(default_factory=tuple)
     voices: tuple[Voice, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class ProsodyConfig:
+    """Prosody and pause durations configuration for audio synthesis."""
+
+    paragraph_pause_ms: int = 700
+    chapter_pause_ms: int = 2500
+    scene_break_pause_ms: int = 1500
+    chapter_title_pause_ms: int = 1200
+    speed: float = 1.0
+

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ebooklib import epub
+from ebooklib import epub  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from pathlib import Path

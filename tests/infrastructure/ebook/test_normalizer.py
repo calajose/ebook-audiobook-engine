@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from audiobook_engine.infrastructure.ebook.normalizer import (
     normalize,
+    normalize_dialogue,
     normalize_whitespace,
     remove_noise,
 )
@@ -67,6 +68,26 @@ class TestRemoveNoise:
     def test_preserves_real_text(self) -> None:
         text = "The quick brown fox jumps over the lazy dog."
         assert remove_noise(text) == text
+
+
+class TestNormalizeDialogue:
+    def test_guillemets_to_quotes(self) -> None:
+        assert normalize_dialogue("«Hola mundo»") == '"Hola mundo"'
+
+    def test_curly_quotes_to_straight(self) -> None:
+        assert normalize_dialogue("“Texto”") == '"Texto"'
+
+    def test_dialogue_dash_start_of_line(self) -> None:
+        assert normalize_dialogue("- Hola, dijo él.") == "— Hola, dijo él."
+        assert normalize_dialogue("– Buenos días.") == "— Buenos días."
+
+    def test_inverted_punctuation_spacing(self) -> None:
+        assert normalize_dialogue("¿ Cómo estás ?") == "¿Cómo estás ?"
+        assert normalize_dialogue("¡ Qué sorpresa !") == "¡Qué sorpresa !"
+
+    def test_ellipsis_standardization(self) -> None:
+        assert normalize_dialogue("Bueno . . . sí.") == "Bueno ... sí."
+        assert normalize_dialogue("Espera....") == "Espera..."
 
 
 class TestNormalize:

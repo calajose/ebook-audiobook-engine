@@ -12,15 +12,16 @@ import re
 # Most TTS engines handle 200-500 characters well.
 DEFAULT_MAX_CHARS: int = 500
 
-# Sentence-ending punctuation followed by whitespace
-_SENTENCE_END_RE = re.compile(r"([.!?])\s+")
+# Sentence-ending punctuation followed by whitespace or end of string
+_SENTENCE_END_RE = re.compile(r'([.!?]+[\u201d\u2019"»\u2014-]*)(?:\s+|$)')
 
 # Abbreviations that should NOT trigger a sentence break
 _ABBREVIATIONS = frozenset(
     {
-        "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st",
+        "mr", "mrs", "ms", "dr", "prof", "sr", "sra", "srta", "jr", "st",
         "vs", "etc", "inc", "ltd", "corp",
         "fig", "eq", "vol", "no", "ch", "pp", "ed", "trans",
+        "pág", "págs", "art", "d", "dña",
     }
 )
 
@@ -28,7 +29,7 @@ _ABBREVIATIONS = frozenset(
 def split_sentences(text: str) -> list[str]:
     """Split text into sentences at natural boundaries.
 
-    Tries to avoid splitting on abbreviations.
+    Handles dialogue tags, trailing quotes/dashes, and abbreviations.
     """
     if not text.strip():
         return []
@@ -37,11 +38,14 @@ def split_sentences(text: str) -> list[str]:
     last_end = 0
 
     for match in _SENTENCE_END_RE.finditer(text):
-        # Check if the word before the period is an abbreviation
-        before = text[last_end : match.start() + 1]  # include the period
+        if match.start() == last_end:
+            continue
+
+        punct_part = match.group(1)
+        before = text[last_end : match.start() + len(punct_part)]
         last_word_match = re.search(r"(\S+)$", before.rstrip())
         if last_word_match:
-            word = last_word_match.group(1).rstrip(".")
+            word = last_word_match.group(1).rstrip('.!?"»”’\u2014-')
             if word.lower() in _ABBREVIATIONS:
                 continue
 
@@ -50,10 +54,19 @@ def split_sentences(text: str) -> list[str]:
         if re.search(r"[A-Z]\.$", before_period):
             continue
 
-        sentence = text[last_end : match.start() + 1].strip()
+        # Avoid breaking if next segment is a dialogue tag (e.g. "—preguntó")
+        after_pos = match.end()
+        remaining_text = text[after_pos:].lstrip()
+        if remaining_text and (
+            re.match(r"^(?:—|-|–)\s*[a-záéíóúñ]", remaining_text)
+            or re.match(r"^[a-záéíóúñ]", remaining_text)
+        ):
+            continue
+
+        sentence = text[last_end : match.start() + len(punct_part)].strip()
         if sentence:
             sentences.append(sentence)
-        last_end = match.start() + 1
+        last_end = match.end()
 
     # Don't forget the last part
     remaining = text[last_end:].strip()

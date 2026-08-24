@@ -33,6 +33,7 @@ class TTSBackend(Protocol):
         language: str,
         voice: str,
         output_path: Path,
+        speed: float = 1.0,
     ) -> None:
         """Synthesize text to a WAV file at the given path."""
         ...

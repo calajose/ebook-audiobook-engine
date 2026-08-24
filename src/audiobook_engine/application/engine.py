@@ -19,6 +19,7 @@ from audiobook_engine.infrastructure.audio.m4b_assembler import (
     _extract_segment_index_from_file,
     assemble_m4b,
 )
+from audiobook_engine.infrastructure.audio.silence import append_silence_to_wav
 from audiobook_engine.infrastructure.audio.wav_merger import merge_wav_files
 from audiobook_engine.infrastructure.ebook.chunker import chunk_text
 from audiobook_engine.infrastructure.ebook.normalizer import normalize
@@ -71,6 +72,11 @@ class AudiobookEngine:
         language: str,
         voice: str,
         output_path: Path,
+        speed: float = 1.0,
+        paragraph_pause_ms: int = 700,
+        chapter_pause_ms: int = 2500,
+        scene_break_pause_ms: int = 1500,
+        chapter_title_pause_ms: int = 1200,
     ) -> AudiobookJob:
         """Create a new conversion job from an ebook file."""
         book = self.inspect(source_path)
@@ -79,6 +85,11 @@ class AudiobookEngine:
             book_title=book.title,
             language=language,
             voice=voice,
+            speed=speed,
+            paragraph_pause_ms=paragraph_pause_ms,
+            chapter_pause_ms=chapter_pause_ms,
+            scene_break_pause_ms=scene_break_pause_ms,
+            chapter_title_pause_ms=chapter_title_pause_ms,
             output_path=output_path,
             work_dir=self._work_dir / "jobs",
         )
@@ -163,7 +174,8 @@ class AudiobookEngine:
             ch_dir = work_dir / "chapters" / f"ch_{ch.index:04d}"
             ch_dir.mkdir(parents=True, exist_ok=True)
 
-            for seg in ch.segments:
+            num_segments = len(ch.segments)
+            for seg_idx, seg in enumerate(ch.segments):
                 if job.state == JobState.CANCELLED:
                     return
 
@@ -183,6 +195,7 @@ class AudiobookEngine:
                             job.language,
                             job.voice,
                             wav_path,
+                            speed=job.speed,
                         )
                     seg_wavs.append(wav_path)
                     job.completed_segments += 1
@@ -200,7 +213,13 @@ class AudiobookEngine:
                     continue
 
                 dest = ch_dir / f"seg_{seg.index:06d}.wav"
-                shutil.copy2(str(merged), str(dest))
+                is_last_in_chapter = seg_idx == num_segments - 1
+                pause_ms = (
+                    job.chapter_pause_ms
+                    if is_last_in_chapter
+                    else job.paragraph_pause_ms
+                )
+                append_silence_to_wav(merged, pause_ms, dest)
 
             # Persist at end of each chapter
             self._persist(job)

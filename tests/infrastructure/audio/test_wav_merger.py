@@ -72,3 +72,17 @@ class TestMergeWavFiles:
             assert w.getnchannels() == 1
             assert w.getsampwidth() == 2
             assert w.getframerate() == 24000
+
+    def test_merge_with_silence_between(self, tmp_path: Path) -> None:
+        a = tmp_path / "a.wav"
+        b = tmp_path / "b.wav"
+        out = tmp_path / "merged.wav"
+        _make_wav(a, 240)  # 10ms at 24000Hz
+        _make_wav(b, 240)  # 10ms at 24000Hz
+
+        # Insert 100ms silence (2400 frames) between a and b
+        merge_wav_files([a, b], out, silence_between_ms=100)
+
+        with wave.open(str(out), "rb") as w:
+            assert w.getnframes() == 240 + 2400 + 240
+

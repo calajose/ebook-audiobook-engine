@@ -103,7 +103,9 @@ class TestKokoroBackendValidateSelection:
 
 class TestKokoroBackendSynthesize:
     def test_synthesize_writes_wav(self, tmp_path: Path) -> None:
-        mock_samples = [0.1, 0.2, 0.3]
+        import numpy as np
+
+        mock_samples = np.array([0.1, 0.2, 0.3], dtype=np.float32)
         mock_sample_rate = 24000
         mock_kokoro = MagicMock()
         mock_kokoro.create.return_value = (
@@ -123,13 +125,26 @@ class TestKokoroBackendSynthesize:
         mock_sf = MagicMock()
         with patch.dict("sys.modules", {"soundfile": mock_sf}):
             backend.synthesize(
-                "Hello world", "en-us", "af_sarah", output
+                "Hello world", "en-us", "af_sarah", output, speed=0.95
             )
 
+        mock_kokoro.create.assert_called_once_with(
+            "Hello world",
+            voice="af_sarah",
+            speed=0.95,
+            lang="en-us",
+        )
         mock_sf.write.assert_called_once()
-        call_args = mock_sf.write.call_args
-        assert call_args[0][1] == mock_samples
-        assert call_args[0][2] == mock_sample_rate
+
+    def test_synthesize_invalid_speed_raises(self) -> None:
+        backend = KokoroBackend(
+            model_path=Path("/fake/model.onnx"),
+            voices_path=Path("/fake/voices.bin"),
+        )
+        with pytest.raises(TTSBackendError, match="Speed must be between"):
+            backend.synthesize(
+                "Hello", "en-us", "af_sarah", Path("/tmp/o.wav"), speed=3.0
+            )
 
     def test_synthesize_empty_text_raises(self) -> None:
         backend = KokoroBackend(

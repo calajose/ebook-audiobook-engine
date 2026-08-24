@@ -14,11 +14,13 @@ if TYPE_CHECKING:
 def merge_wav_files(
     input_paths: list[Path],
     output_path: Path,
+    silence_between_ms: int = 0,
 ) -> None:
     """Concatenate multiple WAV files into a single WAV file.
 
     All input files must have the same sample rate, channels, and
     sample width. Uses raw PCM concatenation — no re-encoding.
+    If silence_between_ms > 0, inserts silent PCM frames between files.
     """
     if not input_paths:
         raise AudioAssemblyError("No WAV files to merge")
@@ -30,11 +32,22 @@ def merge_wav_files(
             params = first.getparams()
             frames = first.readframes(first.getnframes())
 
+        silence_bytes = b""
+        if silence_between_ms > 0:
+            num_silent_frames = int(
+                params.framerate * (silence_between_ms / 1000.0)
+            )
+            silence_bytes = (
+                b"\x00" * (num_silent_frames * params.nchannels * params.sampwidth)
+            )
+
         with wave.open(str(output_path), "wb") as out:
             out.setparams(params)
             out.writeframes(frames)
 
             for path in input_paths[1:]:
+                if silence_bytes:
+                    out.writeframes(silence_bytes)
                 with wave.open(str(path), "rb") as w:
                     # Compare channels, sample width, frame rate
                     # (not nframes — that's what we're combining)

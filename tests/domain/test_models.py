@@ -11,6 +11,7 @@ from audiobook_engine.domain.models import (
     Book,
     Chapter,
     Language,
+    ProsodyConfig,
     TextSegment,
     Voice,
 )
@@ -91,3 +92,24 @@ class TestBackendCapabilities:
         caps = BackendCapabilities(languages=langs, voices=voices)
         assert len(caps.languages) == 1
         assert len(caps.voices) == 1
+
+
+class TestProsodyConfig:
+    def test_default_values(self) -> None:
+        config = ProsodyConfig()
+        assert config.paragraph_pause_ms == 700
+        assert config.chapter_pause_ms == 2500
+        assert config.scene_break_pause_ms == 1500
+        assert config.chapter_title_pause_ms == 1200
+        assert config.speed == 1.0
+
+    def test_custom_values(self) -> None:
+        config = ProsodyConfig(
+            paragraph_pause_ms=800,
+            chapter_pause_ms=3000,
+            speed=0.95,
+        )
+        assert config.paragraph_pause_ms == 800
+        assert config.chapter_pause_ms == 3000
+        assert config.speed == 0.95
+

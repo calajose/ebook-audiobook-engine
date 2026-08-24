@@ -53,6 +53,9 @@ class TestSaveAndLoad:
         assert loaded.backend == job.backend
         assert loaded.language == job.language
         assert loaded.voice == job.voice
+        assert loaded.speed == job.speed
+        assert loaded.paragraph_pause_ms == job.paragraph_pause_ms
+        assert loaded.chapter_pause_ms == job.chapter_pause_ms
         assert loaded.total_segments == job.total_segments
         assert loaded.completed_segments == job.completed_segments
 

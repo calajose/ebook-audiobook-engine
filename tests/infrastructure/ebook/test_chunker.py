@@ -36,6 +36,19 @@ class TestSplitSentences:
         result = split_sentences(text)
         assert any("Well..." in s for s in result)
 
+    def test_dialogue_question_with_tag(self) -> None:
+        text = "—¿Adónde vas? —preguntó Juan. Ya es tarde."
+        result = split_sentences(text)
+        assert len(result) == 2
+        assert result[0] == "—¿Adónde vas? —preguntó Juan."
+        assert result[1] == "Ya es tarde."
+
+    def test_spanish_abbreviations(self) -> None:
+        text = "El Sr. González y la Sra. Martínez hablaron con D. Pedro."
+        result = split_sentences(text)
+        assert len(result) == 1
+
+
 
 class TestChunkText:
     def test_short_text_single_chunk(self) -> None:

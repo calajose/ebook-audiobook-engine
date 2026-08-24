@@ -66,10 +66,21 @@ class TestConvertCommand:
                 "af_heart",
                 "-o",
                 str(tmp_path / "out.m4b"),
+                "--speed",
+                "0.95",
+                "--paragraph-pause",
+                "800",
+                "--chapter-pause",
+                "3000",
             ],
         )
         # Should not crash (may exit with various codes depending on mock)
         assert result.exit_code in (0, 1)
+        mock_engine.create_job.assert_called_once()
+        kwargs = mock_engine.create_job.call_args[1]
+        assert kwargs["speed"] == 0.95
+        assert kwargs["paragraph_pause_ms"] == 800
+        assert kwargs["chapter_pause_ms"] == 3000
 
 
 class TestListVoicesCommand:

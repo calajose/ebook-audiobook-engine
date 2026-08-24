@@ -178,13 +178,20 @@ class KokoroBackend:
         language: str,
         voice: str,
         output_path: Path,
+        speed: float = 1.0,
     ) -> None:
         """Synthesize text to a WAV file.
 
         Downloads the model on first use if not cached.
+        Applies speed control and subtle acoustic tail padding.
         """
         if not text.strip():
             raise TTSBackendError("Cannot synthesize empty text")
+
+        if not (0.5 <= speed <= 2.0):
+            raise TTSBackendError(
+                f"Speed must be between 0.5 and 2.0, got {speed}"
+            )
 
         kokoro = self._ensure_loaded()
         self.validate_selection(language, voice)
@@ -193,7 +200,7 @@ class KokoroBackend:
             samples, sample_rate = kokoro.create(  # type: ignore[attr-defined]
                 text,
                 voice=voice,
-                speed=1.0,
+                speed=speed,
                 lang=language,
             )
         except Exception as exc:
@@ -203,7 +210,14 @@ class KokoroBackend:
             ) from exc
 
         try:
+            import numpy as np
             import soundfile as sf  # type: ignore[import-untyped]
+
+            # Acoustic tail protection for questions and short phrases
+            # (prevents abrupt cutoff from aggressive silence trimming)
+            pad_samples = int(sample_rate * 0.08)
+            if pad_samples > 0 and len(samples) > 0:
+                samples = np.pad(samples, (0, pad_samples), mode="constant")
 
             output_path.parent.mkdir(parents=True, exist_ok=True)
             sf.write(str(output_path), samples, sample_rate)

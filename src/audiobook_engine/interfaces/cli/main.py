@@ -156,6 +156,24 @@ def convert(
     voice: str = typer.Option(
         ..., "--voice", "-v", help="Voice identifier."
     ),
+    speed: float = typer.Option(
+        1.0, "--speed", "-s", help="Speech speed multiplier (0.5 to 2.0)."
+    ),
+    paragraph_pause: int = typer.Option(
+        700,
+        "--paragraph-pause",
+        help="Pause between paragraphs in milliseconds (default: 700).",
+    ),
+    chapter_pause: int = typer.Option(
+        2500,
+        "--chapter-pause",
+        help="Pause between chapters in milliseconds (default: 2500).",
+    ),
+    scene_break_pause: int = typer.Option(
+        1500,
+        "--scene-break-pause",
+        help="Pause for scene breaks in milliseconds (default: 1500).",
+    ),
     work_dir: str | None = typer.Option(
         None, "--work-dir", "-w", help="Working directory for temp files."
     ),
@@ -163,7 +181,7 @@ def convert(
         False, "--verbose", "-V", help="Enable verbose logging."
     ),
 ) -> None:
-    """Convert an ebook to an audiobook."""
+    """Convert an ebook to an audiobook with configurable prosody and pauses."""
     _setup_logging(verbose)
 
     source = Path(book)
@@ -191,7 +209,14 @@ def convert(
     try:
         with console.status("[bold green]Creating job..."):
             job = engine.create_job(
-                source, language, voice, Path(output)
+                source_path=source,
+                language=language,
+                voice=voice,
+                output_path=Path(output),
+                speed=speed,
+                paragraph_pause_ms=paragraph_pause,
+                chapter_pause_ms=chapter_pause,
+                scene_break_pause_ms=scene_break_pause,
             )
     except (TTSBackendError, JobError) as exc:
         console.print(f"[red]Error:[/red] {exc}")

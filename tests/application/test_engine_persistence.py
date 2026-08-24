@@ -27,7 +27,11 @@ def _make_engine(tmp_path: Path) -> AudiobookEngine:
     tts = MagicMock()
 
     def _synthesize(
-        text: str, language: str, voice: str, output: Path
+        text: str,
+        language: str,
+        voice: str,
+        output: Path,
+        speed: float = 1.0,
     ) -> None:
         import wave
 
@@ -99,6 +103,7 @@ class TestEnginePersistence:
         job.transition(JobState.READY)
         job.transition(JobState.SYNTHESIZING)
         job.completed_segments = 0
+        assert job.work_dir is not None
         save_job(job, job.work_dir)
 
         # Second engine: fresh instance, no in-memory state
