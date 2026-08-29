@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.0] - 2026-08-29
+
+### Added
+- **Automatic Intermediate File Cleanup**:
+  - Intermediate WAV files (`segments/`, `chapters/`, `output/`) are now cleaned up automatically after successful M4B/WAV assembly.
+  - New `--keep-intermediates` CLI flag for `convert` and `resume` commands to preserve intermediates for debugging.
+  - `keep_intermediates` field added to `AudiobookJob` domain model and serialized in `job.json` (backward-compatible).
+- **Kokoro Model Update**:
+  - Upgraded model download URLs to `model-files-v1.1` release channel.
+  - Model sizes updated: ONNX ~326 MB, voices ~28 MB.
+
+### Changed
+- Python minimum version requirement raised to 3.13+.
+- `AudiobookEngine._cleanup_intermediates()` removes intermediate directories after assembly unless `keep_intermediates=True`.
+
+---
+
 ## [0.2.0-alpha] - 2026-08-23
 
 ### Added

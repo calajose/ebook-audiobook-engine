@@ -177,6 +177,11 @@ def convert(
     work_dir: str | None = typer.Option(
         None, "--work-dir", "-w", help="Working directory for temp files."
     ),
+    keep_intermediates: bool = typer.Option(
+        False,
+        "--keep-intermediates",
+        help="Keep intermediate WAV files after conversion.",
+    ),
     verbose: bool = typer.Option(
         False, "--verbose", "-V", help="Enable verbose logging."
     ),
@@ -217,6 +222,7 @@ def convert(
                 paragraph_pause_ms=paragraph_pause,
                 chapter_pause_ms=chapter_pause,
                 scene_break_pause_ms=scene_break_pause,
+                keep_intermediates=keep_intermediates,
             )
     except (TTSBackendError, JobError) as exc:
         console.print(f"[red]Error:[/red] {exc}")
@@ -344,6 +350,11 @@ def list_voices(
 @app.command()
 def resume(
     job_id: str = typer.Argument(..., help="Job ID to resume."),
+    keep_intermediates: bool = typer.Option(
+        False,
+        "--keep-intermediates",
+        help="Keep intermediate WAV files after conversion.",
+    ),
     verbose: bool = typer.Option(
         False, "--verbose", "-V", help="Enable verbose logging."
     ),
@@ -372,6 +383,8 @@ def resume(
         engine._jobs[job.id] = job
         if job.source_path is not None:
             engine._books[job.id] = engine.inspect(job.source_path)
+
+    job.keep_intermediates = keep_intermediates
 
     if not job.can_resume():
         console.print(

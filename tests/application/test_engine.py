@@ -163,7 +163,11 @@ class TestRun:
         self, engine: AudiobookEngine, sample_epub: Path
     ) -> None:
         job = engine.create_job(
-            sample_epub, "en-us", "af_sarah", Path("out.wav")
+            sample_epub,
+            "en-us",
+            "af_sarah",
+            Path("out.wav"),
+            keep_intermediates=True,
         )
         engine.run(job.id)
         work_dir = engine._work_dir / job.id
@@ -171,6 +175,19 @@ class TestRun:
         assert (work_dir / "segments").exists()
         assert (work_dir / "chapters").exists()
         assert (work_dir / "output").exists()
+
+    def test_cleanup_intermediates_by_default(
+        self, engine: AudiobookEngine, sample_epub: Path
+    ) -> None:
+        job = engine.create_job(
+            sample_epub, "en-us", "af_sarah", Path("out.wav")
+        )
+        engine.run(job.id)
+        work_dir = engine._work_dir / job.id
+        assert work_dir.exists()
+        assert not (work_dir / "segments").exists()
+        assert not (work_dir / "chapters").exists()
+        assert not (work_dir / "output").exists()
 
 
 class TestCancel:

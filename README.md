@@ -1,6 +1,6 @@
 # ebook-audiobook-engine
 
-> **Version: v0.2-alpha** — Local audiobook conversion engine with configurable prosody, smart dialogue chunking, and pluggable TTS backends.
+> **Version: v0.2.0** — Local audiobook conversion engine with configurable prosody, smart dialogue chunking, and pluggable TTS backends.
 
 Developed in [OpenCode](https://opencode.ai) with Gemini and free AI models.
 
@@ -15,7 +15,7 @@ Developed in [OpenCode](https://opencode.ai) with Gemini and free AI models.
 | **Dialogue & Interrogatives** | ✅ Mejorado | Natural phrasing: dialog tags kept with questions, em-dash normalization, acoustic tail padding |
 | **Chunking** | ✅ Determinado | Max 500 chars, sentence-boundary aware, abbreviation & Spanish punctuation handling |
 | **Assembly (WAV/M4B)** | ✅ Validado | Bit-perfect PCM pause insertion and FFmpeg M4B chapter metadata |
-| **Tests** | 192 passing | 100% test pass rate with strict typing and linting |
+| **Tests** | 193 passing | 100% test pass rate with strict typing and linting |
 
 ---
 
@@ -44,7 +44,7 @@ This project uses [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) as 
 | Model files (~337 MB) | GitHub releases | `~/.cache/ebook-audiobook-engine/kokoro/` |
 | Backend adapter | This repo | `src/.../tts/kokoro/` |
 
-On first synthesis, the engine downloads two model files (~310 MB + ~27 MB) from [kokoro-onnx releases](https://github.com/thewh1teagle/kokoro-onnx/releases) and caches them locally. No internet connection is needed after the initial download.
+On first synthesis, the engine downloads two model files (~326 MB + ~28 MB) from [kokoro-onnx releases](https://github.com/thewh1teagle/kokoro-onnx/releases) and caches them locally. No internet connection is needed after the initial download.
 
 ---
 
@@ -62,7 +62,7 @@ Converts ebooks (EPUB, TXT) into audiobooks (M4B/WAV) through a local pipeline w
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.13+
 - FFmpeg (optional, for M4B output with chapters, metadata, and embedded cover art)
 
 ---
@@ -109,6 +109,9 @@ audiobook-engine convert book.txt -v em_alex -o book.m4b -l es
 
 # Resume interrupted job
 audiobook-engine resume <job-id>
+
+# Convert keeping intermediate WAV files (for debugging)
+audiobook-engine convert book.epub -v ef_dora -o book.m4b --keep-intermediates
 ```
 
 ### CLI Options for `convert`
@@ -123,6 +126,7 @@ audiobook-engine resume <job-id>
 | `--chapter-pause` | | `2500` | Pause duration between chapters in milliseconds |
 | `--scene-break-pause` | | `1500` | Pause duration for scene breaks in milliseconds |
 | `--work-dir` | `-w` | `work/` | Temporary directory for job artifacts and cache |
+| `--keep-intermediates` | | `False` | Keep intermediate WAV files after conversion (cleaned by default) |
 | `--verbose` | `-V` | `False` | Enable debug logging |
 
 ---
@@ -195,6 +199,8 @@ src/audiobook_engine/
 EPUB/TXT → Parse → Normalize → Chunk → TTS (Kokoro) → Silence Injection → WAV → M4B
                                         ↓
                                   Persistence (job.json)
+                                        ↓
+                              Cleanup intermediates (unless --keep-intermediates)
 ```
 
 ---

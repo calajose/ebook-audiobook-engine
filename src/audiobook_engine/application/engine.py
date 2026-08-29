@@ -77,6 +77,7 @@ class AudiobookEngine:
         chapter_pause_ms: int = 2500,
         scene_break_pause_ms: int = 1500,
         chapter_title_pause_ms: int = 1200,
+        keep_intermediates: bool = False,
     ) -> AudiobookJob:
         """Create a new conversion job from an ebook file."""
         book = self.inspect(source_path)
@@ -91,6 +92,7 @@ class AudiobookEngine:
             scene_break_pause_ms=scene_break_pause_ms,
             chapter_title_pause_ms=chapter_title_pause_ms,
             output_path=output_path,
+            keep_intermediates=keep_intermediates,
             work_dir=self._work_dir / "jobs",
         )
         job.work_dir = self._work_dir / "jobs" / job.id
@@ -157,6 +159,9 @@ class AudiobookEngine:
             job.transition(JobState.ASSEMBLING)
             self._persist(job)
             self._assemble(job)
+
+        # Phase 4: Cleanup intermediates (unless keep_intermediates is set)
+        self._cleanup_intermediates(job)
 
         job.transition(JobState.COMPLETED)
         self._persist(job)
@@ -280,6 +285,27 @@ class AudiobookEngine:
             shutil.copy2(
                 str(final_output), str(job.output_path)
             )
+
+    def _cleanup_intermediates(self, job: AudiobookJob) -> None:
+        """Remove intermediate WAV files after successful assembly.
+
+        Preserves job metadata (work/jobs/<id>/) and the final output.
+        Skipped when job.keep_intermediates is True.
+        """
+        if job.keep_intermediates:
+            return
+
+        work_dir = self._work_dir / job.id
+        if not work_dir.exists():
+            return
+
+        for child in work_dir.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child)
+                logger.debug("Removed intermediate directory: %s", child)
+            elif child.is_file():
+                child.unlink()
+                logger.debug("Removed intermediate file: %s", child)
 
     def resume(self, job_id: str) -> AudiobookJob:
         """Resume a previously interrupted job.

@@ -85,6 +85,9 @@ class AudiobookJob:
     total_segments: int = 0
     completed_segments: int = 0
 
+    # Cleanup control
+    keep_intermediates: bool = False
+
     # Error tracking
     error_message: str | None = None
 
