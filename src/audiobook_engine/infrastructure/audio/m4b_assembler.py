@@ -118,7 +118,7 @@ def _create_filelist(chapter_files: list[Path]) -> Path:
     filelist_path = Path(tempfile.mktemp(suffix=".txt", prefix="filelist_"))
     with open(filelist_path, "w") as f:
         for wav in chapter_files:
-            f.write(f"file '{wav}'\n")
+            f.write(f"file '{wav.resolve()}'\n")
     return filelist_path
 
 

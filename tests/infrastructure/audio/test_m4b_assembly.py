@@ -157,7 +157,7 @@ class TestM4bAssembler:
         assert duration == 2500
 
     def test_create_filelist(self, tmp_path: Path) -> None:
-        """Test filelist creation for concat demuxer."""
+        """Test filelist creation for concat demuxer uses absolute paths."""
         ch0 = tmp_path / "chapters" / "ch_0"
         _make_wav(ch0 / "seg_0.wav")
         _make_wav(ch0 / "seg_1.wav")
@@ -168,9 +168,9 @@ class TestM4bAssembler:
         try:
             assert filelist_path.exists()
             content = filelist_path.read_text()
-            assert "file '" in content
-            assert "seg_0.wav" in content
-            assert "seg_1.wav" in content
+            # Filelist must use absolute paths for FFmpeg concat demuxer
+            assert str(ch0 / "seg_0.wav") in content
+            assert str(ch0 / "seg_1.wav") in content
         finally:
             filelist_path.unlink(missing_ok=True)
 
