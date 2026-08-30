@@ -230,13 +230,16 @@ class AudiobookEngine:
             # Persist at end of each chapter
             self._persist(job)
 
-    def _assemble(self, job: AudiobookJob) -> None:
+    def _assemble(
+        self, job: AudiobookJob, work_dir: Path | None = None
+    ) -> None:
         """Assemble WAV segments into the final output.
 
         Uses FFmpeg to produce M4B with chapters and metadata when
         available. Falls back to WAV merge when FFmpeg is missing.
         """
-        work_dir = self._work_dir / job.id
+        if work_dir is None:
+            work_dir = self._work_dir / job.id
         chapters_dir = work_dir / "chapters"
         output_dir = work_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -367,8 +370,14 @@ class AudiobookEngine:
                 f"got '{job.state.value}'"
             )
 
-        # Verify intermediate WAV files exist
-        work_dir = self._work_dir / job.id
+        # Resolve the original work directory from the persisted job.
+        # job.work_dir = original_engine_work_dir / "jobs" / job_id
+        # WAV files are at original_engine_work_dir / job_id
+        if job.work_dir is not None:
+            original_work = job.work_dir.parent.parent
+        else:
+            original_work = self._work_dir
+        work_dir = original_work / job.id
         chapters_dir = work_dir / "chapters"
         if not chapters_dir.exists():
             raise JobError(
@@ -385,7 +394,7 @@ class AudiobookEngine:
         job.transition(JobState.ASSEMBLING)
         self._persist(job)
 
-        self._assemble(job)
+        self._assemble(job, work_dir=work_dir)
 
         job.transition(JobState.COMPLETED)
         self._persist(job)
