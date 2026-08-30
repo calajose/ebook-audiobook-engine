@@ -44,7 +44,7 @@ _TRANSITIONS: dict[JobState, set[JobState]] = {
         JobState.CANCELLED,
     },
     JobState.ASSEMBLING: {JobState.COMPLETED, JobState.FAILED},
-    JobState.COMPLETED: set(),
+    JobState.COMPLETED: {JobState.SYNTHESIZING},
     JobState.FAILED: set(),
     JobState.CANCELLED: set(),
 }

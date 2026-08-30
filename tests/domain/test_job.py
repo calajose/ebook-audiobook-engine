@@ -68,8 +68,20 @@ class TestAudiobookJob:
         job.transition(JobState.SYNTHESIZING)
         job.transition(JobState.ASSEMBLING)
         job.transition(JobState.COMPLETED)
+        # COMPLETED -> ANALYZING is not allowed (only SYNTHESIZING for reassemble)
         with pytest.raises(InvalidStateTransition):
-            job.transition(JobState.SYNTHESIZING)
+            job.transition(JobState.ANALYZING)
+
+    def test_completed_to_synthesizing_for_reassemble(self) -> None:
+        """COMPLETED -> SYNTHESIZING is allowed for reassemble."""
+        job = AudiobookJob()
+        job.transition(JobState.ANALYZING)
+        job.transition(JobState.READY)
+        job.transition(JobState.SYNTHESIZING)
+        job.transition(JobState.ASSEMBLING)
+        job.transition(JobState.COMPLETED)
+        # This should not raise - enables reassemble
+        job.transition(JobState.SYNTHESIZING)
 
     def test_can_resume_from_synthesizing(self) -> None:
         job = AudiobookJob()
