@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Resume Assembly Idempotency**:
   - Fixed bug where resuming a job in ASSEMBLING state would skip assembly and mark as COMPLETED.
   - Assembly phase now retries correctly when job state is ASSEMBLING.
+- **M4B Assembly Relative Path Resolution**:
+  - Fixed "No such file or directory" error in concat demuxer by using absolute paths in the filelist.
+  - FFmpeg's concat demuxer resolves relative paths relative to the filelist location, not CWD.
 
 ---
 
