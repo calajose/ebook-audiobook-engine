@@ -283,13 +283,20 @@ def _build_ffmpeg_args(
     # Cover image: copy without re-encoding
     if has_cover:
         args.extend([
-            "-map", "1:v",
+            "-map", "2:v",
             "-c:v", "copy",
             "-disposition:v:0", "attached_pic",
         ])
 
-    # Import metadata from the ffmetadata file (chapters + tags)
+    # Import chapter markers from the ffmetadata file
     args.extend(["-map_metadata", "1"])
+
+    # Global metadata tags (explicit flags for iPod/M4B ilst atom)
+    args.extend(["-metadata", f"title={book.title}"])
+    args.extend(["-metadata", f"artist={book.author}"])
+    args.extend(["-metadata", f"album={book.title}"])
+    args.extend(["-metadata", f"language={book.language}"])
+    args.extend(["-metadata", "genre=Audiobook"])
 
     # Output format
     args.extend(["-f", "ipod"])
