@@ -1,8 +1,8 @@
 # ebook-audiobook-engine
 
-> **Version: v0.5.0** — Local audiobook conversion engine with configurable prosody, smart dialogue chunking, and pluggable TTS backends.
+> **Version: v0.5.1** — Local audiobook conversion engine with configurable prosody, smart dialogue chunking, and pluggable TTS backends.
 
-Developed in [OpenCode](https://opencode.ai) with Gemini and free AI models.
+Developed in [OpenCode](https://opencode.ai) through human-guided orchestration of Mimo V2.5, Gemini 3.5 Flash Lite, Gemini 3.7 Flash, Gemini 3.1 Pro, and minor assistance from auxiliary models.
 
 ## Current State
 
@@ -112,10 +112,16 @@ audiobook-engine convert book.epub \
   --output book.m4b
 
 # Check job status
-audiobook-engine status <job-id>
+ audiobook-engine status <job-id>
+
+# List unfinished jobs
+audiobook-engine resume
 
 # Resume interrupted job
 audiobook-engine resume <job-id>
+
+# Clean working directory
+audiobook-engine clean
 
 # Re-assemble completed job (without re-synthesizing)
 audiobook-engine reassemble <job-id>
