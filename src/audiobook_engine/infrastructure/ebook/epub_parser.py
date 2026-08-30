@@ -181,6 +181,7 @@ class EPUBParser:
                         title=heading or f"Section {idx + 1}",
                         index=idx,
                         segments=segments,
+                        source_file=item.get_name(),
                     )
                 )
 
@@ -193,7 +194,7 @@ class EPUBParser:
     @staticmethod
     def _extract_heading(xhtml: str) -> str:
         """Extract the first h1/h2/h3 heading from XHTML content."""
-        for tag in ("h1", "h2", "h3"):
+        for tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
             match = re.search(
                 rf"<{tag}[^>]*>(.*?)</{tag}>",
                 xhtml,

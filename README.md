@@ -1,6 +1,6 @@
 # ebook-audiobook-engine
 
-> **Version: v0.4.0** — Local audiobook conversion engine with configurable prosody, smart dialogue chunking, and pluggable TTS backends.
+> **Version: v0.5.0** — Local audiobook conversion engine with configurable prosody, smart dialogue chunking, and pluggable TTS backends.
 
 Developed in [OpenCode](https://opencode.ai) with Gemini and free AI models.
 
@@ -10,12 +10,13 @@ Developed in [OpenCode](https://opencode.ai) with Gemini and free AI models.
 |---|---|---|
 | **EPUB → M4B** | ✅ Funcional | Chapters, metadata, cover image embedding via FFmpeg |
 | **TXT → M4B** | ✅ Funcional | Paragraph-aware parsing, auto fallback to WAV merger |
+| **MOBI/AZW/AZW3 → M4B** | ✅ Funcional | Kindle ebook support via KindleUnpack (DRM-free only) |
 | **Kokoro TTS Backend** | ✅ Funcional | Multilingual ONNX local inference with auto model download |
 | **Prosody & Pauses** | ✅ Funcional | Configurable paragraph (700ms), chapter (2500ms), and scene break (1500ms) pauses |
 | **Dialogue & Interrogatives** | ✅ Mejorado | Natural phrasing: dialog tags kept with questions, em-dash normalization, acoustic tail padding |
 | **Chunking** | ✅ Determinado | Max 500 chars, sentence-boundary aware, abbreviation & Spanish punctuation handling |
 | **Assembly (WAV/M4B)** | ✅ Validado | Bit-perfect PCM pause insertion, FFmpeg concat demuxer for large audiobooks |
-| **Tests** | 199 passing | 100% test pass rate with strict typing and linting |
+| **Tests** | 211 passing | 100% test pass rate with strict typing and linting |
 
 ---
 
@@ -50,7 +51,7 @@ On first synthesis, the engine downloads two model files (~326 MB + ~28 MB) from
 
 ## Overview
 
-Converts ebooks (EPUB, TXT) into audiobooks (M4B/WAV) through a local pipeline with no external cloud service dependencies.
+Converts ebooks (EPUB, TXT, MOBI, AZW, AZW3) into audiobooks (M4B/WAV) through a local pipeline with no external cloud service dependencies.
 
 **Interfaces:**
 
@@ -126,6 +127,9 @@ audiobook-engine cancel <job-id>
 # Convert plain text ebook
 audiobook-engine convert book.txt -v em_alex -o book.m4b -l es
 
+# Convert Kindle ebook (MOBI/AZW/AZW3)
+audiobook-engine convert book.azw3 -v ef_dora -o book.m4b -l es
+
 # Convert keeping intermediate WAV files (for debugging)
 audiobook-engine convert book.epub -v ef_dora -o book.m4b --keep-intermediates
 ```
@@ -153,13 +157,22 @@ audiobook-engine convert book.epub -v ef_dora -o book.m4b --keep-intermediates
 from pathlib import Path
 from audiobook_engine import AudiobookEngine
 from audiobook_engine.infrastructure.ebook.epub_parser import EPUBParser
+from audiobook_engine.infrastructure.ebook.mobi_parser import MOBIParser
 from audiobook_engine.infrastructure.tts.kokoro.backend import KokoroBackend
 
+# Parse EPUB
 parser = EPUBParser()
 tts = KokoroBackend()
 engine = AudiobookEngine(parser, tts, work_dir=Path("work"))
 
 book = engine.inspect(Path("book.epub"))
+print(f"Title: {book.title}, Chapters: {len(book.chapters)}")
+
+# Or parse Kindle ebook (MOBI/AZW/AZW3)
+mobi_parser = MOBIParser()
+engine_mobi = AudiobookEngine(mobi_parser, tts, work_dir=Path("work"))
+
+book = engine_mobi.inspect(Path("book.azw3"))
 print(f"Title: {book.title}, Chapters: {len(book.chapters)}")
 
 job = engine.create_job(
@@ -190,6 +203,7 @@ src/audiobook_engine/
 ├── infrastructure/
 │   ├── ebook/
 │   │   ├── epub_parser.py
+│   │   ├── mobi_parser.py   # MOBI/AZW/AZW3 (Kindle) format support
 │   │   ├── txt_parser.py
 │   │   ├── normalizer.py   # Dialogue dashes, quotes, whitespace cleaning
 │   │   └── chunker.py      # Sentence & dialogue-aware text chunking
@@ -212,11 +226,11 @@ src/audiobook_engine/
 ## Pipeline
 
 ```
-EPUB/TXT → Parse → Normalize → Chunk → TTS (Kokoro) → Silence Injection → WAV → M4B
-                                        ↓
-                                  Persistence (job.json)
-                                        ↓
-                              Cleanup intermediates (unless --keep-intermediates)
+EPUB/TXT/MOBI/AZW/AZW3 → Parse → Normalize → Chunk → TTS (Kokoro) → Silence Injection → WAV → M4B
+                                                  ↓
+                                            Persistence (job.json)
+                                                  ↓
+                                    Cleanup intermediates (unless --keep-intermediates)
 ```
 
 ---

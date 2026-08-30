@@ -110,10 +110,10 @@ class TestCapabilities:
 
 class TestCreateJob:
     def test_creates_job(
-        self, engine: AudiobookEngine, sample_epub: Path
+        self, engine: AudiobookEngine, sample_epub: Path, tmp_path: Path
     ) -> None:
         job = engine.create_job(
-            sample_epub, "en-us", "af_sarah", Path("out.m4b")
+            sample_epub, "en-us", "af_sarah", tmp_path / "out.m4b"
         )
         assert job.state == JobState.CREATED
         assert job.book_title == "Test Book"
@@ -122,10 +122,10 @@ class TestCreateJob:
         assert job.source_path == sample_epub
 
     def test_get_job(
-        self, engine: AudiobookEngine, sample_epub: Path
+        self, engine: AudiobookEngine, sample_epub: Path, tmp_path: Path
     ) -> None:
         job = engine.create_job(
-            sample_epub, "en-us", "af_sarah", Path("out.m4b")
+            sample_epub, "en-us", "af_sarah", tmp_path / "out.m4b"
         )
         found = engine.get_job(job.id)
         assert found.id == job.id
@@ -139,10 +139,10 @@ class TestCreateJob:
 
 class TestRun:
     def test_full_pipeline(
-        self, engine: AudiobookEngine, sample_epub: Path
+        self, engine: AudiobookEngine, sample_epub: Path, tmp_path: Path
     ) -> None:
         job = engine.create_job(
-            sample_epub, "en-us", "af_sarah", Path("out.m4b")
+            sample_epub, "en-us", "af_sarah", tmp_path / "out.m4b"
         )
         result = engine.run(job.id)
         assert result.state == JobState.COMPLETED
@@ -160,13 +160,13 @@ class TestRun:
         assert output.exists()
 
     def test_creates_work_directory(
-        self, engine: AudiobookEngine, sample_epub: Path
+        self, engine: AudiobookEngine, sample_epub: Path, tmp_path: Path
     ) -> None:
         job = engine.create_job(
             sample_epub,
             "en-us",
             "af_sarah",
-            Path("out.wav"),
+            tmp_path / "out.wav",
             keep_intermediates=True,
         )
         engine.run(job.id)
@@ -177,10 +177,10 @@ class TestRun:
         assert (work_dir / "output").exists()
 
     def test_cleanup_intermediates_by_default(
-        self, engine: AudiobookEngine, sample_epub: Path
+        self, engine: AudiobookEngine, sample_epub: Path, tmp_path: Path
     ) -> None:
         job = engine.create_job(
-            sample_epub, "en-us", "af_sarah", Path("out.wav")
+            sample_epub, "en-us", "af_sarah", tmp_path / "out.wav"
         )
         engine.run(job.id)
         work_dir = engine._work_dir / job.id
@@ -192,19 +192,19 @@ class TestRun:
 
 class TestCancel:
     def test_cancel_created_job(
-        self, engine: AudiobookEngine, sample_epub: Path
+        self, engine: AudiobookEngine, sample_epub: Path, tmp_path: Path
     ) -> None:
         job = engine.create_job(
-            sample_epub, "en-us", "af_sarah", Path("out.wav")
+            sample_epub, "en-us", "af_sarah", tmp_path / "out.wav"
         )
         result = engine.cancel(job.id)
         assert result.state == JobState.CANCELLED
 
     def test_cancel_completed_job_raises(
-        self, engine: AudiobookEngine, sample_epub: Path
+        self, engine: AudiobookEngine, sample_epub: Path, tmp_path: Path
     ) -> None:
         job = engine.create_job(
-            sample_epub, "en-us", "af_sarah", Path("out.wav")
+            sample_epub, "en-us", "af_sarah", tmp_path / "out.wav"
         )
         engine.run(job.id)
         with pytest.raises(JobError, match="Cannot cancel"):
@@ -213,19 +213,19 @@ class TestCancel:
 
 class TestResume:
     def test_resume_not_resumable_raises(
-        self, engine: AudiobookEngine, sample_epub: Path
+        self, engine: AudiobookEngine, sample_epub: Path, tmp_path: Path
     ) -> None:
         job = engine.create_job(
-            sample_epub, "en-us", "af_sarah", Path("out.wav")
+            sample_epub, "en-us", "af_sarah", tmp_path / "out.wav"
         )
         with pytest.raises(JobError, match="cannot be resumed"):
             engine.resume(job.id)
 
     def test_resume_from_synthesizing(
-        self, engine: AudiobookEngine, sample_epub: Path
+        self, engine: AudiobookEngine, sample_epub: Path, tmp_path: Path
     ) -> None:
         job = engine.create_job(
-            sample_epub, "en-us", "af_sarah", Path("out.wav")
+            sample_epub, "en-us", "af_sarah", tmp_path / "out.wav"
         )
         job.transition(JobState.ANALYZING)
         job.transition(JobState.READY)
@@ -235,11 +235,11 @@ class TestResume:
         assert result.state == JobState.COMPLETED
 
     def test_resume_from_assembling(
-        self, engine: AudiobookEngine, sample_epub: Path
+        self, engine: AudiobookEngine, sample_epub: Path, tmp_path: Path
     ) -> None:
         """Test that resume retries assembly when state is ASSEMBLING."""
         job = engine.create_job(
-            sample_epub, "en-us", "af_sarah", Path("out.wav")
+            sample_epub, "en-us", "af_sarah", tmp_path / "out.wav"
         )
         job.transition(JobState.ANALYZING)
         job.transition(JobState.READY)

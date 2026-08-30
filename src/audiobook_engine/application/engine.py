@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -33,6 +34,28 @@ if TYPE_CHECKING:
     from audiobook_engine.domain.protocols import EbookParser, TTSBackend
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ChapterAnalysis:
+    """Analysis results for a single chapter."""
+
+    index: int
+    title: str
+    source_file: str | None
+    segments: int
+    chars: int
+    words: int
+    chunks: int
+
+
+@dataclass(frozen=True)
+class BookAnalysis:
+    """Complete analysis results for an ebook."""
+
+    book: Book
+    chapter_analyses: tuple[ChapterAnalysis, ...]
+    warnings: tuple[str, ...]
 
 
 class AudiobookEngine:
@@ -61,6 +84,70 @@ class AudiobookEngine:
     def inspect(self, path: Path) -> Book:
         """Parse an ebook and return its structured representation."""
         return self._parser.inspect(path)
+
+    def analyze(
+        self,
+        source_path: Path,
+        chapter_indices: list[int] | None = None,
+        max_chars: int = 500,
+    ) -> BookAnalysis:
+        """Analyze an ebook without generating audio.
+
+        Runs parsing, chapter detection, normalization and chunking.
+        Returns a BookAnalysis with per-chapter stats and warnings.
+        """
+        book = self.inspect(source_path)
+        warnings: list[str] = []
+        chapter_analyses: list[ChapterAnalysis] = []
+
+        for ch in book.chapters:
+            if chapter_indices is not None and ch.index not in chapter_indices:
+                continue
+
+            total_chars = 0
+            total_words = 0
+            total_chunks = 0
+
+            for seg in ch.segments:
+                cleaned = normalize(seg.text)
+                chunks = chunk_text(cleaned, max_chars=max_chars)
+                total_chars += len(cleaned)
+                total_words += len(cleaned.split())
+                total_chunks += len(chunks)
+
+            chapter_analyses.append(
+                ChapterAnalysis(
+                    index=ch.index,
+                    title=ch.title,
+                    source_file=ch.source_file,
+                    segments=len(ch.segments),
+                    chars=total_chars,
+                    words=total_words,
+                    chunks=total_chunks,
+                )
+            )
+
+            if not ch.title or ch.title.startswith("Section "):
+                warnings.append(
+                    f"Chapter {ch.index}: no heading detected "
+                    f"(auto-titled '{ch.title}')"
+                )
+            if len(ch.segments) <= 1:
+                warnings.append(
+                    f"Chapter {ch.index}: only {len(ch.segments)} "
+                    f"segment(s) — may be a parsing artifact"
+                )
+            if total_chars == 0:
+                warnings.append(
+                    f"Chapter {ch.index}: 0 characters after "
+                    f"normalization (noise-only content)"
+                )
+
+        return BookAnalysis(
+            book=book,
+            chapter_analyses=tuple(chapter_analyses),
+            warnings=tuple(warnings),
+        )
 
     def capabilities(self) -> BackendCapabilities:
         """Return available languages and voices from the TTS backend."""

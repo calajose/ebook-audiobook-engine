@@ -33,6 +33,7 @@ from audiobook_engine.domain.exceptions import (
 )
 from audiobook_engine.domain.job import JobState
 from audiobook_engine.infrastructure.ebook.epub_parser import EPUBParser
+from audiobook_engine.infrastructure.ebook.mobi_parser import MOBIParser
 from audiobook_engine.infrastructure.ebook.txt_parser import TXTParser
 from audiobook_engine.infrastructure.tts.kokoro.backend import (
     _voice_to_language,
@@ -67,10 +68,12 @@ def _get_parser(source: Path) -> EbookParser:
         return EPUBParser()
     elif ext == ".txt":
         return TXTParser()
+    elif ext in (".mobi", ".azw", ".azw3"):
+        return MOBIParser()
     else:
         raise EbookError(
             f"Unsupported format: {ext}. "
-            f"Supported: .epub, .txt"
+            f"Supported: .epub, .txt, .mobi, .azw, .azw3"
         )
 
 
@@ -332,32 +335,103 @@ def capabilities(
         raise typer.Exit(1) from None
 
 
+def _parse_chapter_indices(spec: str) -> list[int]:
+    """Parse a chapter index specification like '0,2,5' or '1-3'."""
+    indices: list[int] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if "-" in part:
+            start_str, end_str = part.split("-", 1)
+            start = int(start_str.strip())
+            end = int(end_str.strip())
+            indices.extend(range(start, end + 1))
+        else:
+            indices.append(int(part))
+    return sorted(set(indices))
+
+
 @app.command()
 def inspect(
     book: str = typer.Argument(..., help="Path to the ebook file."),
+    chapters: str | None = typer.Option(
+        None,
+        "--chapters",
+        "-c",
+        help="Comma-separated chapter indices to analyze (e.g. '0,2,5' or '1-3').",
+    ),
+    max_chars: int = typer.Option(
+        500,
+        "--max-chars",
+        help="Max characters per TTS chunk (default: 500).",
+    ),
     work_dir: str | None = typer.Option(
         None, "--work-dir", "-w", help="Working directory."
     ),
 ) -> None:
-    """Analyze an ebook and show its structure."""
+    """Analyze an ebook and show its structure.
+
+    Runs parsing, chapter detection and chunking without generating
+    audio. Shows per-chapter statistics and detection warnings.
+    """
     source = Path(book)
     if not source.exists():
         console.print(f"[red]Error:[/red] File not found: {book}")
         raise typer.Exit(1)
 
+    chapter_indices = _parse_chapter_indices(chapters) if chapters else None
+
     engine = _create_engine(work_dir, source)
-    with console.status("[bold green]Inspecting ebook..."):
+    with console.status("[bold green]Analyzing ebook..."):
         try:
-            book_data = engine.inspect(source)
-            total_segments = sum(len(ch.segments) for ch in book_data.chapters)
-            console.print(f"[bold]Title:[/bold] {book_data.title}")
-            console.print(f"[bold]Author:[/bold] {book_data.author}")
-            console.print(f"[bold]Language:[/bold] {book_data.language}")
-            console.print(f"[bold]Chapters:[/bold] {len(book_data.chapters)}")
-            console.print(f"[bold]Total segments:[/bold] {total_segments}")
+            result = engine.analyze(source, chapter_indices, max_chars)
         except EbookError as exc:
             console.print(f"[red]Error:[/red] {exc}")
             raise typer.Exit(1) from None
+
+    book_data = result.book
+    chapter_analyses = result.chapter_analyses
+    warnings = result.warnings
+
+    console.print(f"[bold]Title:[/bold] {book_data.title}")
+    console.print(f"[bold]Author:[/bold] {book_data.author}")
+    console.print(f"[bold]Language:[/bold] {book_data.language}")
+    console.print(
+        f"[bold]Chapters:[/bold] "
+        f"{len(chapter_analyses)}"
+        f"{f' / {len(book_data.chapters)} total' if chapters else ''}"
+    )
+
+    total_chars = sum(ca.chars for ca in chapter_analyses)
+    total_words = sum(ca.words for ca in chapter_analyses)
+    total_chunks = sum(ca.chunks for ca in chapter_analyses)
+    console.print(f"[bold]Total chars:[/bold] {total_chars:,}")
+    console.print(f"[bold]Total words:[/bold] {total_words:,}")
+    console.print(f"[bold]Total chunks:[/bold] {total_chunks}")
+
+    table = Table(title="Chapter Analysis")
+    table.add_column("#", style="dim", justify="right")
+    table.add_column("Title", style="cyan")
+    table.add_column("Source", style="blue")
+    table.add_column("Chars", justify="right")
+    table.add_column("Words", justify="right")
+    table.add_column("Chunks", justify="right", style="green")
+
+    for ca in chapter_analyses:
+        table.add_row(
+            str(ca.index),
+            ca.title,
+            ca.source_file or "—",
+            f"{ca.chars:,}",
+            f"{ca.words:,}",
+            str(ca.chunks),
+        )
+
+    console.print(table)
+
+    if warnings:
+        console.print()
+        for w in warnings:
+            console.print(f"[yellow]Warning:[/yellow] {w}")
 
 
 @app.command()

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ebook-audiobook-engine"
-version = "0.2.0a0"
+version = "0.5.0"
 description = "Local audiobook-conversion engine with pluggable TTS backends"
 readme = "README.md"
 license = "MIT"
@@ -14,6 +14,7 @@ dependencies = [
     "rich>=13,<14",
     "ebooklib>=0.18",
     "platformdirs>=4,<5",
+    "mobi>=0.4",
 ]
 
 [project.optional-dependencies]

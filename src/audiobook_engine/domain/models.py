@@ -24,6 +24,7 @@ class Chapter:
     title: str
     index: int
     segments: tuple[TextSegment, ...] = field(default_factory=tuple)
+    source_file: str | None = None
 
 
 @dataclass(frozen=True)

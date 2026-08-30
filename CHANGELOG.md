@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] - 2026-08-30
+
+### Added
+- **Ebook Analysis Without Audio** (`inspect` command enhanced):
+  - `audiobook-engine inspect` now runs the full parse→normalize→chunk pipeline without generating audio.
+  - Per-chapter Rich table with: index, title, source XHTML file, characters, words, and chunk count.
+  - `--chapters / -c` option to filter by chapter indices (e.g. `0,2,5` or `1-3`).
+  - `--max-chars` option to override the default chunk size (500 chars).
+  - Automatic warnings for dubious chapter detection: missing headings, single-segment chapters, noise-only content.
+- **MOBI/AZW/AZW3 Format Support**:
+  - New `MOBIParser` class supporting `.mobi`, `.azw`, and `.azw3` (Kindle) ebook formats.
+  - Uses the `mobi` library (KindleUnpack) to unpack files to EPUB (KF8/AZW3) or HTML (MOBI v7/AZW).
+  - AZW3/KF8 files: extracts to EPUB and parses with full metadata (title, author, language, cover).
+  - MOBI v7/AZW files: extracts to HTML with chapter detection via NCX table-of-contents, heading tags, or single-chapter fallback.
+  - MOBI v7/AZW files: reads `content.opf` metadata (language, author, title) instead of hardcoding defaults.
+  - DRM-protected files: clear error message ("DRM-protected file not supported").
+  - Automatic cleanup of temporary extraction directories.
+  - Full `EbookParser` protocol compliance with deterministic output.
+- **CLI Updates**:
+  - `_get_parser()` factory now dispatches `.mobi`, `.azw`, `.azw3` extensions to `MOBIParser`.
+  - Error message updated to list all supported formats.
+- **New Dependency**:
+  - Added `mobi>=0.4` to project dependencies (GPL-3.0, wraps KindleUnpack).
+
+### Changed
+- `pyproject.toml`: Added `mobi>=0.4` to `dependencies`.
+- `infrastructure/ebook/__init__.py`: Now re-exports `MOBIParser`.
+- `domain/models.py`: `Chapter` dataclass now includes optional `source_file: str | None` field (backward-compatible, defaults to `None`).
+- `infrastructure/ebook/epub_parser.py`: Populates `Chapter.source_file` with the XHTML item filename from the EPUB spine.
+- `infrastructure/ebook/epub_parser.py`: `_extract_heading()` now checks `<h4>`, `<h5>`, `<h6>` tags in addition to `<h1>`–`<h3>` (Calibre-generated EPUBs often use `<h4>` for chapter titles).
+- `infrastructure/ebook/mobi_parser.py`: Populates `Chapter.source_file` with the XHTML item filename for AZW3/KF8 extractions.
+- `infrastructure/ebook/mobi_parser.py`: HTML path (MOBI v7) now reads `content.opf` for metadata and `toc.ncx` for chapter splitting, with fallback to heading tags.
+- `infrastructure/ebook/mobi_parser.py`: Same heading tag expansion as EPUB for the HTML extraction path.
+- `application/engine.py`: New `ChapterAnalysis` and `BookAnalysis` dataclasses; `AudiobookEngine.analyze()` method orchestrates parsing, normalization and chunking without TTS.
+- `interfaces/cli/main.py`: `inspect` command rewritten to use `analyze()` with Rich table output, chapter filtering, and warning display. Added `_parse_chapter_indices()` helper for range/spec parsing.
+
+---
+
 ## [0.4.0] - 2026-08-30
 
 ### Added
