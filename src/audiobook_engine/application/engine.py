@@ -250,12 +250,18 @@ class AudiobookEngine:
         # Try M4B assembly with FFmpeg
         if ffmpeg.is_available():
             book = self._books[job.id]
+            voice = job.voice
+            backend = job.backend
+            narrator = (
+                f"{voice} - {backend}" if voice and backend else ""
+            )
             try:
                 assemble_m4b(
                     job=job,
                     book=book,
                     chapters_dir=chapters_dir,
                     output_path=job.output_path,
+                    narrator=narrator,
                 )
                 return
             except Exception as exc:
@@ -360,7 +366,13 @@ class AudiobookEngine:
             self._jobs[job.id] = job
             # Re-inspect the book so segments are available
             if job.source_path is not None:
-                self._books[job.id] = self._parser.inspect(job.source_path)
+                book = self._parser.inspect(job.source_path)
+                self._books[job.id] = book
+                logger.info(
+                    "Re-inspected book for reassemble: "
+                    "cover_path=%s",
+                    book.cover_path,
+                )
 
         job = self.get_job(job_id)
 

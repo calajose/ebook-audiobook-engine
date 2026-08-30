@@ -26,13 +26,14 @@ def assemble_m4b(
     book: Book,
     chapters_dir: Path,
     output_path: Path,
+    narrator: str = "",
 ) -> None:
     """Assemble WAV segments into an M4B audiobook.
 
     Creates an M4B with:
     - Concatenated audio from all chapter WAV files
     - Chapter markers matching the book structure
-    - Metadata tags (title, author, language)
+    - Metadata tags (title, author, narrator, language)
     - Optional cover image from book metadata
 
     Uses FFmpeg's concat demuxer to avoid opening all files simultaneously.
@@ -58,7 +59,7 @@ def assemble_m4b(
 
     # Create temporary files
     filelist_path = _create_filelist(chapter_files)
-    metadata_path = _create_ffmetadata_file(chapter_metadata, book)
+    metadata_path = _create_ffmetadata_file(chapter_metadata, book, narrator)
 
     try:
         args = _build_ffmpeg_args(
@@ -66,6 +67,7 @@ def assemble_m4b(
             metadata_path,
             book,
             output_path,
+            narrator,
         )
         ffmpeg.run(args, timeout=1800)
     finally:
@@ -124,6 +126,7 @@ def _create_filelist(chapter_files: list[Path]) -> Path:
 def _create_ffmetadata_file(
     chapter_metadata: list[dict[str, object]],
     book: Book,
+    narrator: str = "",
 ) -> Path:
     """Create a temporary ;FFMETADATA1 file for FFmpeg.
 
@@ -139,7 +142,9 @@ def _create_ffmetadata_file(
 
     # Global metadata tags
     lines.append(f"title={book.title}")
-    lines.append(f"artist={book.author}")
+    lines.append(f"artist={narrator}")
+    lines.append(f"composer={book.author}")
+    lines.append(f"album_artist={book.author}")
     lines.append(f"album={book.title}")
     lines.append("genre=Audiobook")
     if book.language:
@@ -246,6 +251,7 @@ def _build_ffmpeg_args(
     metadata_path: Path,
     book: Book,
     output_path: Path,
+    narrator: str = "",
 ) -> list[str]:
     """Build the complete FFmpeg argument list for M4B assembly.
 
@@ -263,11 +269,15 @@ def _build_ffmpeg_args(
     args.extend(["-f", "ffmetadata", "-i", str(metadata_path)])
 
     # Input 2: cover image (if available)
-    has_cover = (
-        book.cover_path is not None and book.cover_path.exists()
-    )
-    if has_cover:
-        args.extend(["-i", str(book.cover_path.resolve())])
+    cover_path = book.cover_path
+    has_cover = cover_path is not None and cover_path.exists()
+    if not has_cover:
+        logger.warning(
+            "No cover image found (cover_path=%s)",
+            cover_path,
+        )
+    if has_cover and cover_path is not None:
+        args.extend(["-i", str(cover_path.resolve())])
 
     # Stream mapping
     args.extend(["-map", "0:a"])
@@ -293,7 +303,9 @@ def _build_ffmpeg_args(
 
     # Global metadata tags (explicit flags for iPod/M4B ilst atom)
     args.extend(["-metadata", f"title={book.title}"])
-    args.extend(["-metadata", f"artist={book.author}"])
+    args.extend(["-metadata", f"artist={narrator}"])
+    args.extend(["-metadata", f"composer={book.author}"])
+    args.extend(["-metadata", f"album_artist={book.author}"])
     args.extend(["-metadata", f"album={book.title}"])
     args.extend(["-metadata", f"language={book.language}"])
     args.extend(["-metadata", "genre=Audiobook"])

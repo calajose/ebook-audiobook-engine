@@ -90,22 +90,51 @@ class EPUBParser:
     def _extract_cover(
         book: epub.EpubBook, source_path: Path
     ) -> Path | None:
-        cover_items = book.get_metadata("OPF", "cover")
-        if not cover_items:
-            return None
-
-        cover_id = cover_items[0][1].get("content", "")
-        if not cover_id:
-            return None
-
+        # EPUB3: look for EpubCover items (properties="cover-image")
         for item in book.get_items():
-            if item.get_name() == cover_id:
-                suffix = Path(cover_id).suffix
+            if isinstance(item, epub.EpubCover):
+                content = item.get_content()
+                if content:
+                    suffix = Path(item.get_name()).suffix or ".jpg"
+                    out = (
+                        source_path.parent
+                        / f"{source_path.stem}_cover{suffix}"
+                    )
+                    out.write_bytes(content)
+                    return out
+
+        # EPUB2 fallback: look in OPF meta metadata
+        opf_ns = "OPF"
+        meta_entries = book.metadata.get(opf_ns, {}).get("meta", [])
+        for _val, others in meta_entries:
+            if others and others.get("name") == "cover":
+                cover_id = others.get("content", "")
+                if cover_id:
+                    item = book.get_item_with_id(cover_id)
+                    if item is not None:
+                        content = item.get_content()
+                        if content:
+                            suffix = (
+                                Path(item.get_name()).suffix or ".jpg"
+                            )
+                            out = (
+                                source_path.parent
+                                / f"{source_path.stem}_cover{suffix}"
+                            )
+                            out.write_bytes(content)
+                            return out
+
+        # Direct fallback: try item with id="cover" regardless of metadata
+        item = book.get_item_with_id("cover")
+        if item is not None:
+            content = item.get_content()
+            if content:
+                suffix = Path(item.get_name()).suffix or ".jpg"
                 out = (
                     source_path.parent
                     / f"{source_path.stem}_cover{suffix}"
                 )
-                out.write_bytes(item.get_content())
+                out.write_bytes(content)
                 return out
 
         return None

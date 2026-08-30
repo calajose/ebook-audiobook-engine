@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `audiobook-engine reassemble`: Re-assembles a completed job without re-synthesizing. Useful for testing different output formats or re-generating output after assembly issues.
 
 ### Fixed
+- **EPUB Cover Extraction**:
+  - Fixed cover detection for EPUBs where ebooklib does not parse the `<meta name="cover">` tag into `book.metadata`.
+  - Added direct fallback using `book.get_item_with_id("cover")` for EPUB2 files with non-standard metadata.
+  - Verified with Harry Potter EPUB (cover.jpeg detected, 160KB).
+- **M4B Metadata Tags (Audio Player Compatibility)**:
+  - `artist` now contains the narrator (voice + engine, e.g. "ef_dora - kokoro") instead of the author.
+  - `composer` now contains the book author (writer).
+  - `album_artist` contains the author for player grouping (Cozy, Apple Books).
+  - Tags updated in both `;FFMETADATA1` file and explicit FFmpeg `-metadata` flags.
 - **Resume Progress Reporting**:
   - Fixed issue where `audiobook-engine resume` did not display progress bars or segment counters.
   - Refactored `resume` command to run in a background thread and hook into the existing CLI `_display_progress` UI, matching behavior of the `convert` command.

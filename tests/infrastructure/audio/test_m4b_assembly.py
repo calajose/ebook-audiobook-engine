@@ -14,8 +14,8 @@ from audiobook_engine.infrastructure.audio import ffmpeg
 from audiobook_engine.infrastructure.audio.m4b_assembler import (
     _build_chapter_metadata,
     _collect_chapter_files,
-    _create_filelist,
     _create_ffmetadata_file,
+    _create_filelist,
     _get_wav_duration_ms,
     _ms_to_timestamp,
     assemble_m4b,
@@ -204,7 +204,7 @@ class TestM4bAssembler:
             tmp_path / "chapters", book
         )
         metadata_path = _create_ffmetadata_file(
-            chapter_metadata, book
+            chapter_metadata, book, narrator="ef_dora - kokoro"
         )
 
         try:
@@ -216,7 +216,9 @@ class TestM4bAssembler:
 
             # Check global tags
             assert "title=Test Book" in content
-            assert "artist=Test Author" in content
+            assert "artist=ef_dora - kokoro" in content
+            assert "composer=Test Author" in content
+            assert "album_artist=Test Author" in content
             assert "genre=Audiobook" in content
 
             # Check chapter blocks
@@ -267,6 +269,7 @@ class TestM4bAssembler:
             book,
             tmp_path / "chapters",
             tmp_path / "output" / "book.m4b",
+            narrator="ef_dora - kokoro",
         )
 
         mock_run.assert_called_once()

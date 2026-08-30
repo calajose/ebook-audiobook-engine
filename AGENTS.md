@@ -4,6 +4,13 @@ Welcome to `ebook-audiobook-engine`. This document serves as the single source o
 
 ---
 
+## ⚠️ CRITICAL RULES
+
+1. **NEVER commit or push without explicit user request.** Only run `git commit` and `git push` when the user explicitly asks for it (e.g. "commit", "push", "commit y push"). Do NOT proactively commit changes, even if they seem complete.
+2. **Domain isolation:** `domain/` must NEVER import from `infrastructure/`, `application/`, `interfaces/`, or third-party libraries.
+
+---
+
 ## 1. Project Overview & Architectural Vision
 
 `ebook-audiobook-engine` is a local, offline-first ebook-to-audiobook conversion pipeline built with Clean Architecture / Hexagonal Architecture principles.
