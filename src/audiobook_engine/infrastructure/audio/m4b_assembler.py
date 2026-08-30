@@ -1,7 +1,7 @@
 """M4B assembler — builds M4B audiobooks from WAV segments using FFmpeg.
 
-Supports chapter markers, metadata embedding (title, author, language),
-and optional cover image embedding.
+Supports chapter markers via ;FFMETADATA1 files, metadata embedding
+(title, author, language), and optional cover image embedding.
 """
 
 from __future__ import annotations
@@ -53,25 +53,24 @@ def assemble_m4b(
             f"No WAV files found in {chapters_dir}"
         )
 
-    # Create chapter metadata file
+    # Build chapter metadata
     chapter_metadata = _build_chapter_metadata(chapters_dir, book)
 
-    # Create temporary filelist for concat demuxer
+    # Create temporary files
     filelist_path = _create_filelist(chapter_files)
+    metadata_path = _create_ffmetadata_file(chapter_metadata, book)
 
     try:
-        # Build FFmpeg command
         args = _build_ffmpeg_args(
             filelist_path,
-            len(chapter_files),
-            chapter_metadata,
+            metadata_path,
             book,
             output_path,
         )
-
         ffmpeg.run(args, timeout=1800)
     finally:
         filelist_path.unlink(missing_ok=True)
+        metadata_path.unlink(missing_ok=True)
 
 
 def _extract_chapter_index_from_dir(dir_name: str) -> int:
@@ -122,6 +121,49 @@ def _create_filelist(chapter_files: list[Path]) -> Path:
     return filelist_path
 
 
+def _create_ffmetadata_file(
+    chapter_metadata: list[dict[str, object]],
+    book: Book,
+) -> Path:
+    """Create a temporary ;FFMETADATA1 file for FFmpeg.
+
+    This file contains both global metadata (title, artist, etc.)
+    and chapter definitions that players like Cozy, Apple Books,
+    and Audiobookshelf can recognize.
+
+    Returns the path to the temporary metadata file.
+    """
+    metadata_path = Path(tempfile.mktemp(suffix=".txt", prefix="metadata_"))
+
+    lines: list[str] = [";FFMETADATA1"]
+
+    # Global metadata tags
+    lines.append(f"title={book.title}")
+    lines.append(f"artist={book.author}")
+    lines.append(f"album={book.title}")
+    lines.append("genre=Audiobook")
+    if book.language:
+        lines.append(f"language={book.language}")
+
+    # Chapter blocks
+    for ch in chapter_metadata:
+        start_ms = int(str(ch["start_ms"]))
+        end_ms = int(str(ch["end_ms"]))
+        title = str(ch["title"])
+
+        lines.append("")
+        lines.append("[CHAPTER]")
+        lines.append("TIMEBASE=1/1000")
+        lines.append(f"START={start_ms}")
+        lines.append(f"END={end_ms}")
+        lines.append(f"title={title}")
+
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+    return metadata_path
+
+
 def _build_chapter_metadata(
     chapters_dir: Path,
     book: Book,
@@ -168,7 +210,6 @@ def _build_chapter_metadata(
 def _extract_chapter_index(dir_name: str) -> int:
     """Extract chapter index from directory name like 'ch_0' or 'ch_0000'."""
     try:
-        # Handle both 'ch_0' and 'ch_0000' formats
         parts = dir_name.split("_", 1)
         if len(parts) == 2:
             return int(parts[1])
@@ -202,79 +243,58 @@ def _get_wav_duration_ms(wav_path: Path) -> int:
 
 def _build_ffmpeg_args(
     filelist_path: Path,
-    num_audio_files: int,
-    chapter_metadata: list[dict[str, object]],
+    metadata_path: Path,
     book: Book,
     output_path: Path,
 ) -> list[str]:
     """Build the complete FFmpeg argument list for M4B assembly.
 
-    Uses concat demuxer to avoid opening all files simultaneously.
+    Argument order follows FFmpeg best practices:
+    1. All inputs first (filelist, metadata, cover)
+    2. All output options (codec, format, mapping)
+    3. Output file path
     """
     args: list[str] = ["-y", "-nostdin"]
 
-    # Input: concat filelist (handles all audio files sequentially)
+    # Input 0: concat filelist (audio)
     args.extend(["-f", "concat", "-safe", "0", "-i", str(filelist_path)])
 
-    # Output format and codec
+    # Input 1: ffmetadata file (chapters + global metadata)
+    args.extend(["-f", "ffmetadata", "-i", str(metadata_path)])
+
+    # Input 2: cover image (if available)
+    has_cover = (
+        book.cover_path is not None and book.cover_path.exists()
+    )
+    if has_cover:
+        args.extend(["-i", str(book.cover_path.resolve())])
+
+    # Stream mapping
+    args.extend(["-map", "0:a"])
+
+    # Audio codec
     args.extend([
         "-c:a", "aac",
         "-b:a", "128k",
         "-ar", "44100",
         "-ac", "1",
-        "-f", "ipod",
     ])
 
-    # Metadata tags
-    args.extend(["-metadata", f"title={book.title}"])
-    args.extend(["-metadata", f"artist={book.author}"])
-    args.extend(["-metadata", f"album={book.title}"])
-    args.extend(["-metadata", f"language={book.language}"])
-    args.extend(["-metadata", "genre=Audiobook"])
-
-    # Chapter markers via metadata file
-    if chapter_metadata:
-        chapter_args = _build_chapter_ffmpeg_args(chapter_metadata)
-        args.extend(chapter_args)
-
-    # Cover image if available
-    if book.cover_path is not None and book.cover_path.exists():
+    # Cover image: copy without re-encoding
+    if has_cover:
         args.extend([
-            "-i", str(book.cover_path),
-            "-map", "0:a",
             "-map", "1:v",
-            "-c:v", "mjpeg",
+            "-c:v", "copy",
             "-disposition:v:0", "attached_pic",
         ])
 
+    # Import metadata from the ffmetadata file (chapters + tags)
+    args.extend(["-map_metadata", "1"])
+
+    # Output format
+    args.extend(["-f", "ipod"])
+
     args.append(str(output_path))
-    return args
-
-
-def _build_chapter_ffmpeg_args(
-    chapter_metadata: list[dict[str, object]],
-) -> list[str]:
-    """Build FFmpeg chapter metadata arguments."""
-    # Format: metadata:s:v chapter_key=value pairs
-    args: list[str] = []
-    for ch in chapter_metadata:
-        start_ms = int(str(ch["start_ms"]))
-        end_ms = int(str(ch["end_ms"]))
-        title = str(ch["title"])
-
-        # FFmpeg uses time in format HH:MM:SS.mmm
-        start_time = _ms_to_timestamp(start_ms)
-        end_time = _ms_to_timestamp(end_ms)
-
-        args.extend([
-            "-metadata:s:a",
-            f"chapter_start={start_time}",
-            "-metadata:s:a",
-            f"chapter_end={end_time}",
-            "-metadata:s:a",
-            f"chapter_title={title}",
-        ])
-
     return args
 
 

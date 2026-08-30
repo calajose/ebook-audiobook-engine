@@ -15,7 +15,7 @@ Developed in [OpenCode](https://opencode.ai) with Gemini and free AI models.
 | **Dialogue & Interrogatives** | ✅ Mejorado | Natural phrasing: dialog tags kept with questions, em-dash normalization, acoustic tail padding |
 | **Chunking** | ✅ Determinado | Max 500 chars, sentence-boundary aware, abbreviation & Spanish punctuation handling |
 | **Assembly (WAV/M4B)** | ✅ Validado | Bit-perfect PCM pause insertion, FFmpeg concat demuxer for large audiobooks |
-| **Tests** | 196 passing | 100% test pass rate with strict typing and linting |
+| **Tests** | 199 passing | 100% test pass rate with strict typing and linting |
 
 ---
 

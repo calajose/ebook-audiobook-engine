@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **M4B Assembly Relative Path Resolution**:
   - Fixed "No such file or directory" error in concat demuxer by using absolute paths in the filelist.
   - FFmpeg's concat demuxer resolves relative paths relative to the filelist location, not CWD.
+- **M4B Chapter Markers & Metadata**:
+  - Replaced broken `-metadata:s:a` chapter approach with proper `;FFMETADATA1` file using `[CHAPTER]` blocks.
+  - Chapter markers now recognized by players (Cozy, Apple Books, Audiobookshelf).
+  - Global metadata (title, author, language, genre) embedded via `;FFMETADATA1` and `-map_metadata`.
+  - Cover image copied without re-encoding (`-c:v copy`).
+  - FFmpeg arguments reordered: all inputs first, then output options.
 
 ---
 

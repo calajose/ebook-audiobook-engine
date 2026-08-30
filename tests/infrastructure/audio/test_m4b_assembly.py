@@ -15,6 +15,7 @@ from audiobook_engine.infrastructure.audio.m4b_assembler import (
     _build_chapter_metadata,
     _collect_chapter_files,
     _create_filelist,
+    _create_ffmetadata_file,
     _get_wav_duration_ms,
     _ms_to_timestamp,
     assemble_m4b,
@@ -193,6 +194,51 @@ class TestM4bAssembler:
         # File should not exist after cleanup
         assert not filelist_path.exists()
 
+    def test_create_ffmetadata_file(self, tmp_path: Path) -> None:
+        """Test ;FFMETADATA1 file creation with chapter blocks."""
+        ch0 = tmp_path / "chapters" / "ch_0"
+        _make_wav(ch0 / "seg_0.wav", duration_ms=5000)
+
+        book = _make_book()
+        chapter_metadata = _build_chapter_metadata(
+            tmp_path / "chapters", book
+        )
+        metadata_path = _create_ffmetadata_file(
+            chapter_metadata, book
+        )
+
+        try:
+            assert metadata_path.exists()
+            content = metadata_path.read_text()
+
+            # Check header
+            assert ";FFMETADATA1" in content
+
+            # Check global tags
+            assert "title=Test Book" in content
+            assert "artist=Test Author" in content
+            assert "genre=Audiobook" in content
+
+            # Check chapter blocks
+            assert "[CHAPTER]" in content
+            assert "TIMEBASE=1/1000" in content
+            assert "START=0" in content
+            assert "END=5000" in content
+            assert "title=Chapter 1" in content
+        finally:
+            metadata_path.unlink(missing_ok=True)
+
+    def test_create_ffmetadata_cleanup(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that ffmetadata file is cleaned up after use."""
+        book = _make_book()
+        metadata_path = _create_ffmetadata_file([], book)
+
+        assert metadata_path.exists()
+        metadata_path.unlink(missing_ok=True)
+        assert not metadata_path.exists()
+
     @patch("audiobook_engine.infrastructure.audio.ffmpeg.run")
     @patch(
         "audiobook_engine.infrastructure.audio.ffmpeg.is_available",
@@ -228,8 +274,9 @@ class TestM4bAssembler:
         # Verify concat demuxer is used
         assert "-f" in args
         assert "concat" in args
-        assert "-safe" in args
-        assert "0" in args
+        # Verify ffmetadata is used
+        assert "ffmetadata" in args
+        assert "-map_metadata" in args
         # Verify output file is specified
         assert str(tmp_path / "output" / "book.m4b") in args
 
