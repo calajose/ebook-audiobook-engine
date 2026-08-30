@@ -14,6 +14,7 @@ from audiobook_engine.infrastructure.audio import ffmpeg
 from audiobook_engine.infrastructure.audio.m4b_assembler import (
     _build_chapter_metadata,
     _collect_chapter_files,
+    _create_filelist,
     _get_wav_duration_ms,
     _ms_to_timestamp,
     assemble_m4b,
@@ -155,6 +156,43 @@ class TestM4bAssembler:
         duration = _get_wav_duration_ms(wav)
         assert duration == 2500
 
+    def test_create_filelist(self, tmp_path: Path) -> None:
+        """Test filelist creation for concat demuxer."""
+        ch0 = tmp_path / "chapters" / "ch_0"
+        _make_wav(ch0 / "seg_0.wav")
+        _make_wav(ch0 / "seg_1.wav")
+
+        files = _collect_chapter_files(tmp_path / "chapters")
+        filelist_path = _create_filelist(files)
+
+        try:
+            assert filelist_path.exists()
+            content = filelist_path.read_text()
+            assert "file '" in content
+            assert "seg_0.wav" in content
+            assert "seg_1.wav" in content
+        finally:
+            filelist_path.unlink(missing_ok=True)
+
+    def test_create_filelist_cleanup(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that filelist is cleaned up after use."""
+        ch0 = tmp_path / "chapters" / "ch_0"
+        _make_wav(ch0 / "seg_0.wav")
+
+        files = _collect_chapter_files(tmp_path / "chapters")
+        filelist_path = _create_filelist(files)
+
+        # File exists before cleanup
+        assert filelist_path.exists()
+
+        # Cleanup
+        filelist_path.unlink(missing_ok=True)
+
+        # File should not exist after cleanup
+        assert not filelist_path.exists()
+
     @patch("audiobook_engine.infrastructure.audio.ffmpeg.run")
     @patch(
         "audiobook_engine.infrastructure.audio.ffmpeg.is_available",
@@ -187,9 +225,13 @@ class TestM4bAssembler:
 
         mock_run.assert_called_once()
         args = mock_run.call_args[0][0]
-        assert "-i" in args
-        assert str(ch0 / "seg_0.wav") in args
-        assert "m4b" in args[-1] or "output" in args[-1]
+        # Verify concat demuxer is used
+        assert "-f" in args
+        assert "concat" in args
+        assert "-safe" in args
+        assert "0" in args
+        # Verify output file is specified
+        assert str(tmp_path / "output" / "book.m4b") in args
 
     @patch(
         "audiobook_engine.infrastructure.audio.ffmpeg.is_available",

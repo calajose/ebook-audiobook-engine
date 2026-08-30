@@ -322,8 +322,11 @@ def capabilities(
     engine = _create_engine(work_dir)
     try:
         caps = engine.capabilities()
-        console.print(f"[bold]Languages:[/bold] {', '.join(lang.code for lang in caps.languages)}")
-        console.print(f"[bold]Total voices:[/bold] {len(caps.voices)}")
+        langs = ", ".join(lang.code for lang in caps.languages)
+        console.print(f"[bold]Languages:[/bold] {langs}")
+        console.print(
+            f"[bold]Total voices:[/bold] {len(caps.voices)}"
+        )
     except TTSBackendError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from None
@@ -341,7 +344,7 @@ def inspect(
     if not source.exists():
         console.print(f"[red]Error:[/red] File not found: {book}")
         raise typer.Exit(1)
-    
+
     engine = _create_engine(work_dir, source)
     with console.status("[bold green]Inspecting ebook..."):
         try:
@@ -373,12 +376,20 @@ def status(
             from audiobook_engine.infrastructure.persistence.job_store import load_job
             job = load_job(work)
             engine._jobs[job.id] = job
-        
+
         job = engine.get_job(job_id)
         console.print(f"[bold]State:[/bold] {job.state.value}")
-        progress = (job.completed_segments / job.total_segments * 100) if job.total_segments > 0 else 0
-        console.print(f"[bold]Progress:[/bold] {job.completed_segments}/{job.total_segments} segments ({progress:.1f}%)")
-        console.print(f"[bold]Created:[/bold] {job.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        total = job.total_segments or 1
+        progress = job.completed_segments / total * 100
+        console.print(
+            f"[bold]Progress:[/bold] "
+            f"{job.completed_segments}/{job.total_segments} "
+            f"segments ({progress:.1f}%)"
+        )
+        console.print(
+            f"[bold]Created:[/bold] "
+            f"{job.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
     except JobError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from None
@@ -406,6 +417,53 @@ def cancel(
     except JobError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from None
+
+
+@app.command()
+def reassemble(
+    job_id: str = typer.Argument(..., help="Job ID to reassemble."),
+    output: str | None = typer.Option(
+        None, "--output", "-o", help="New output path (optional)."
+    ),
+    work_dir: str | None = typer.Option(
+        None, "--work-dir", "-w", help="Working directory."
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-V", help="Enable verbose logging."
+    ),
+) -> None:
+    """Re-assemble a completed job without re-synthesizing.
+
+    Useful for testing different output formats or re-generating
+    output after assembly issues.
+    """
+    _setup_logging(verbose)
+
+    engine = _create_engine(work_dir)
+
+    try:
+        # Load from disk if not in memory
+        work = Path(work_dir or "work") / "jobs" / job_id
+        if work.exists():
+            from audiobook_engine.infrastructure.persistence.job_store import (
+                load_job,
+            )
+
+            job = load_job(work)
+            engine._jobs[job.id] = job
+            if job.source_path is not None:
+                engine._books[job.id] = engine.inspect(job.source_path)
+
+        new_output = Path(output) if output else None
+        job = engine.reassemble(job_id, new_output)
+        console.print(
+            f"[bold green]Done![/bold green] "
+            f"Output: {job.output_path}"
+        )
+    except JobError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from None
+
 
 @app.command("list-voices")
 def list_voices(

@@ -233,3 +233,18 @@ class TestResume:
         assert job.can_resume()
         result = engine.resume(job.id)
         assert result.state == JobState.COMPLETED
+
+    def test_resume_from_assembling(
+        self, engine: AudiobookEngine, sample_epub: Path
+    ) -> None:
+        """Test that resume retries assembly when state is ASSEMBLING."""
+        job = engine.create_job(
+            sample_epub, "en-us", "af_sarah", Path("out.wav")
+        )
+        job.transition(JobState.ANALYZING)
+        job.transition(JobState.READY)
+        job.transition(JobState.SYNTHESIZING)
+        job.transition(JobState.ASSEMBLING)
+        assert job.can_resume()
+        result = engine.resume(job.id)
+        assert result.state == JobState.COMPLETED

@@ -154,10 +154,11 @@ class AudiobookEngine:
                 self._persist(job)
             self._synthesize(job, book)
 
-        # Phase 3: Assemble (only if synthesis completed)
-        if job.state == JobState.SYNTHESIZING:
-            job.transition(JobState.ASSEMBLING)
-            self._persist(job)
+        # Phase 3: Assemble (retry if previously failed at ASSEMBLING)
+        if job.state in (JobState.SYNTHESIZING, JobState.ASSEMBLING):
+            if job.state == JobState.SYNTHESIZING:
+                job.transition(JobState.ASSEMBLING)
+                self._persist(job)
             self._assemble(job)
 
         # Phase 4: Cleanup intermediates (unless keep_intermediates is set)
@@ -333,6 +334,62 @@ class AudiobookEngine:
         # Reset completed_segments for accurate recount
         job.completed_segments = 0
         return self.run(job_id)
+
+    def reassemble(
+        self,
+        job_id: str,
+        output_path: Path | None = None,
+    ) -> AudiobookJob:
+        """Re-assemble a completed job with a potentially different output.
+
+        Only re-runs the assembly phase using existing WAV segments.
+        Does not re-synthesize. Useful for testing different output formats
+        or re-generating output after assembly issues.
+
+        The job must be in COMPLETED state and have intermediate WAV files.
+        """
+        # Try in-memory first
+        if job_id not in self._jobs:
+            work_dir = self._work_dir / "jobs" / job_id
+            if not work_dir.exists():
+                raise JobError(f"Job not found: {job_id}")
+            job = load_job(work_dir)
+            self._jobs[job.id] = job
+            # Re-inspect the book so segments are available
+            if job.source_path is not None:
+                self._books[job.id] = self._parser.inspect(job.source_path)
+
+        job = self.get_job(job_id)
+
+        if job.state != JobState.COMPLETED:
+            raise JobError(
+                f"Job must be in 'completed' state to reassemble, "
+                f"got '{job.state.value}'"
+            )
+
+        # Verify intermediate WAV files exist
+        work_dir = self._work_dir / job.id
+        chapters_dir = work_dir / "chapters"
+        if not chapters_dir.exists():
+            raise JobError(
+                f"No intermediate files found for job {job_id}. "
+                f"Cannot reassemble without WAV segments."
+            )
+
+        # Update output path if provided
+        if output_path is not None:
+            job.output_path = output_path
+
+        # Reset state to ASSEMBLING and re-run assembly
+        job.transition(JobState.SYNTHESIZING)
+        job.transition(JobState.ASSEMBLING)
+        self._persist(job)
+
+        self._assemble(job)
+
+        job.transition(JobState.COMPLETED)
+        self._persist(job)
+        return job
 
     def list_jobs(self) -> list[AudiobookJob]:
         """Return all jobs known to this engine instance."""

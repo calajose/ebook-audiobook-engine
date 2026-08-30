@@ -7,14 +7,14 @@ and optional cover image embedding.
 from __future__ import annotations
 
 import logging
+import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from audiobook_engine.domain.exceptions import AudioAssemblyError
 from audiobook_engine.infrastructure.audio import ffmpeg
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from audiobook_engine.domain.job import AudiobookJob
     from audiobook_engine.domain.models import Book
 
@@ -35,6 +35,8 @@ def assemble_m4b(
     - Metadata tags (title, author, language)
     - Optional cover image from book metadata
 
+    Uses FFmpeg's concat demuxer to avoid opening all files simultaneously.
+
     Raises AudioAssemblyError if FFmpeg is unavailable or fails.
     """
     if not ffmpeg.is_available():
@@ -54,15 +56,22 @@ def assemble_m4b(
     # Create chapter metadata file
     chapter_metadata = _build_chapter_metadata(chapters_dir, book)
 
-    # Build FFmpeg command
-    args = _build_ffmpeg_args(
-        chapter_files,
-        chapter_metadata,
-        book,
-        output_path,
-    )
+    # Create temporary filelist for concat demuxer
+    filelist_path = _create_filelist(chapter_files)
 
-    ffmpeg.run(args, timeout=1800)
+    try:
+        # Build FFmpeg command
+        args = _build_ffmpeg_args(
+            filelist_path,
+            len(chapter_files),
+            chapter_metadata,
+            book,
+            output_path,
+        )
+
+        ffmpeg.run(args, timeout=1800)
+    finally:
+        filelist_path.unlink(missing_ok=True)
 
 
 def _extract_chapter_index_from_dir(dir_name: str) -> int:
@@ -99,6 +108,18 @@ def _collect_chapter_files(chapters_dir: Path) -> list[Path]:
         ):
             files.append(wav)
     return files
+
+
+def _create_filelist(chapter_files: list[Path]) -> Path:
+    """Create a temporary filelist for FFmpeg's concat demuxer.
+
+    Returns the path to the temporary filelist file.
+    """
+    filelist_path = Path(tempfile.mktemp(suffix=".txt", prefix="filelist_"))
+    with open(filelist_path, "w") as f:
+        for wav in chapter_files:
+            f.write(f"file '{wav}'\n")
+    return filelist_path
 
 
 def _build_chapter_metadata(
@@ -180,28 +201,20 @@ def _get_wav_duration_ms(wav_path: Path) -> int:
 
 
 def _build_ffmpeg_args(
-    chapter_files: list[Path],
+    filelist_path: Path,
+    num_audio_files: int,
     chapter_metadata: list[dict[str, object]],
     book: Book,
     output_path: Path,
 ) -> list[str]:
-    """Build the complete FFmpeg argument list for M4B assembly."""
+    """Build the complete FFmpeg argument list for M4B assembly.
+
+    Uses concat demuxer to avoid opening all files simultaneously.
+    """
     args: list[str] = ["-y", "-nostdin"]
 
-    # Input files — one per chapter WAV
-    for wav in chapter_files:
-        args.extend(["-i", str(wav)])
-
-    # Build filter complex for concatenation
-    n = len(chapter_files)
-    if n == 1:
-        filter_complex = "[0:a]acopy[out]"
-    else:
-        inputs = "".join(f"[{i}:a]" for i in range(n))
-        filter_complex = f"{inputs}concat=n={n}:v=0:a=1[out]"
-
-    args.extend(["-filter_complex", filter_complex])
-    args.extend(["-map", "[out]"])
+    # Input: concat filelist (handles all audio files sequentially)
+    args.extend(["-f", "concat", "-safe", "0", "-i", str(filelist_path)])
 
     # Output format and codec
     args.extend([
@@ -228,7 +241,8 @@ def _build_ffmpeg_args(
     if book.cover_path is not None and book.cover_path.exists():
         args.extend([
             "-i", str(book.cover_path),
-            "-map", f"{n}:v",
+            "-map", "0:a",
+            "-map", "1:v",
             "-c:v", "mjpeg",
             "-disposition:v:0", "attached_pic",
         ])

@@ -14,8 +14,8 @@ Developed in [OpenCode](https://opencode.ai) with Gemini and free AI models.
 | **Prosody & Pauses** | ✅ Funcional | Configurable paragraph (700ms), chapter (2500ms), and scene break (1500ms) pauses |
 | **Dialogue & Interrogatives** | ✅ Mejorado | Natural phrasing: dialog tags kept with questions, em-dash normalization, acoustic tail padding |
 | **Chunking** | ✅ Determinado | Max 500 chars, sentence-boundary aware, abbreviation & Spanish punctuation handling |
-| **Assembly (WAV/M4B)** | ✅ Validado | Bit-perfect PCM pause insertion and FFmpeg M4B chapter metadata |
-| **Tests** | 193 passing | 100% test pass rate with strict typing and linting |
+| **Assembly (WAV/M4B)** | ✅ Validado | Bit-perfect PCM pause insertion, FFmpeg concat demuxer for large audiobooks |
+| **Tests** | 196 passing | 100% test pass rate with strict typing and linting |
 
 ---
 
@@ -115,6 +115,10 @@ audiobook-engine status <job-id>
 
 # Resume interrupted job
 audiobook-engine resume <job-id>
+
+# Re-assemble completed job (without re-synthesizing)
+audiobook-engine reassemble <job-id>
+audiobook-engine reassemble <job-id> -o new_output.m4b
 
 # Cancel a job
 audiobook-engine cancel <job-id>

@@ -15,9 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `audiobook-engine inspect`: Analyzes an ebook and shows its structure (title, author, language, chapters, segments).
   - `audiobook-engine status`: Shows the status and progress of a job.
   - `audiobook-engine cancel`: Cancels a running job.
+  - `audiobook-engine reassemble`: Re-assembles a completed job without re-synthesizing. Useful for testing different output formats or re-generating output after assembly issues.
+
+### Fixed
 - **Resume Progress Reporting**:
   - Fixed issue where `audiobook-engine resume` did not display progress bars or segment counters.
   - Refactored `resume` command to run in a background thread and hook into the existing CLI `_display_progress` UI, matching behavior of the `convert` command.
+- **M4B Assembly File Descriptor Limit**:
+  - Replaced FFmpeg concat filter (N simultaneous inputs) with concat demuxer (sequential file processing).
+  - Resolves "Too many open files" error when assembling audiobooks with 1000+ segments.
+  - Temporary filelist is automatically cleaned up after assembly.
+- **Resume Assembly Idempotency**:
+  - Fixed bug where resuming a job in ASSEMBLING state would skip assembly and mark as COMPLETED.
+  - Assembly phase now retries correctly when job state is ASSEMBLING.
 
 ---
 
