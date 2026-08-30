@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] - 2026-08-30
+
+### Added
+- **CLI Commands**:
+  - `audiobook-engine capabilities`: Shows supported languages and voice counts.
+  - `audiobook-engine inspect`: Analyzes an ebook and shows its structure (title, author, language, chapters, segments).
+  - `audiobook-engine status`: Shows the status and progress of a job.
+  - `audiobook-engine cancel`: Cancels a running job.
+- **Resume Progress Reporting**:
+  - Fixed issue where `audiobook-engine resume` did not display progress bars or segment counters.
+  - Refactored `resume` command to run in a background thread and hook into the existing CLI `_display_progress` UI, matching behavior of the `convert` command.
+
+---
+
 ## [0.2.0] - 2026-08-29
 
 ### Added

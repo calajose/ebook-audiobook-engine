@@ -1,6 +1,6 @@
 # ebook-audiobook-engine
 
-> **Version: v0.2.0** — Local audiobook conversion engine with configurable prosody, smart dialogue chunking, and pluggable TTS backends.
+> **Version: v0.4.0** — Local audiobook conversion engine with configurable prosody, smart dialogue chunking, and pluggable TTS backends.
 
 Developed in [OpenCode](https://opencode.ai) with Gemini and free AI models.
 
@@ -92,6 +92,12 @@ pip install -e ".[dev]"         # Testing/linting
 audiobook-engine list-voices
 audiobook-engine list-voices -l es
 
+# Check capabilities
+audiobook-engine capabilities
+
+# Inspect an ebook
+audiobook-engine inspect book.epub
+
 # Convert EPUB with default prosody
 audiobook-engine convert book.epub -v ef_dora -o book.m4b
 
@@ -104,11 +110,17 @@ audiobook-engine convert book.epub \
   --chapter-pause 3000 \
   --output book.m4b
 
-# Convert plain text ebook
-audiobook-engine convert book.txt -v em_alex -o book.m4b -l es
+# Check job status
+audiobook-engine status <job-id>
 
 # Resume interrupted job
 audiobook-engine resume <job-id>
+
+# Cancel a job
+audiobook-engine cancel <job-id>
+
+# Convert plain text ebook
+audiobook-engine convert book.txt -v em_alex -o book.m4b -l es
 
 # Convert keeping intermediate WAV files (for debugging)
 audiobook-engine convert book.epub -v ef_dora -o book.m4b --keep-intermediates

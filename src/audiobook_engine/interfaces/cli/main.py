@@ -27,7 +27,6 @@ from rich.table import Table
 
 from audiobook_engine.application.engine import AudiobookEngine
 from audiobook_engine.domain.exceptions import (
-    AudioAssemblyError,
     EbookError,
     JobError,
     TTSBackendError,
@@ -313,6 +312,101 @@ def convert(
         raise typer.Exit(1)
 
 
+@app.command()
+def capabilities(
+    work_dir: str | None = typer.Option(
+        None, "--work-dir", "-w", help="Working directory."
+    ),
+) -> None:
+    """Display supported languages and voice counts."""
+    engine = _create_engine(work_dir)
+    try:
+        caps = engine.capabilities()
+        console.print(f"[bold]Languages:[/bold] {', '.join(lang.code for lang in caps.languages)}")
+        console.print(f"[bold]Total voices:[/bold] {len(caps.voices)}")
+    except TTSBackendError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from None
+
+
+@app.command()
+def inspect(
+    book: str = typer.Argument(..., help="Path to the ebook file."),
+    work_dir: str | None = typer.Option(
+        None, "--work-dir", "-w", help="Working directory."
+    ),
+) -> None:
+    """Analyze an ebook and show its structure."""
+    source = Path(book)
+    if not source.exists():
+        console.print(f"[red]Error:[/red] File not found: {book}")
+        raise typer.Exit(1)
+    
+    engine = _create_engine(work_dir, source)
+    with console.status("[bold green]Inspecting ebook..."):
+        try:
+            book_data = engine.inspect(source)
+            total_segments = sum(len(ch.segments) for ch in book_data.chapters)
+            console.print(f"[bold]Title:[/bold] {book_data.title}")
+            console.print(f"[bold]Author:[/bold] {book_data.author}")
+            console.print(f"[bold]Language:[/bold] {book_data.language}")
+            console.print(f"[bold]Chapters:[/bold] {len(book_data.chapters)}")
+            console.print(f"[bold]Total segments:[/bold] {total_segments}")
+        except EbookError as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(1) from None
+
+
+@app.command()
+def status(
+    job_id: str = typer.Argument(..., help="Job ID to check."),
+    work_dir: str | None = typer.Option(
+        None, "--work-dir", "-w", help="Working directory."
+    ),
+) -> None:
+    """Show the status of a job."""
+    engine = _create_engine(work_dir)
+    try:
+        # Load from disk if not in memory
+        work = Path(work_dir or "work") / "jobs" / job_id
+        if work.exists():
+            from audiobook_engine.infrastructure.persistence.job_store import load_job
+            job = load_job(work)
+            engine._jobs[job.id] = job
+        
+        job = engine.get_job(job_id)
+        console.print(f"[bold]State:[/bold] {job.state.value}")
+        progress = (job.completed_segments / job.total_segments * 100) if job.total_segments > 0 else 0
+        console.print(f"[bold]Progress:[/bold] {job.completed_segments}/{job.total_segments} segments ({progress:.1f}%)")
+        console.print(f"[bold]Created:[/bold] {job.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    except JobError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from None
+
+
+@app.command()
+def cancel(
+    job_id: str = typer.Argument(..., help="Job ID to cancel."),
+    work_dir: str | None = typer.Option(
+        None, "--work-dir", "-w", help="Working directory."
+    ),
+) -> None:
+    """Cancel a running job."""
+    engine = _create_engine(work_dir)
+    try:
+        # Load from disk if not in memory
+        work = Path(work_dir or "work") / "jobs" / job_id
+        if work.exists():
+            from audiobook_engine.infrastructure.persistence.job_store import load_job
+            job = load_job(work)
+            engine._jobs[job.id] = job
+
+        engine.cancel(job_id)
+        console.print(f"[green]Cancelled job:[/green] {job_id}")
+    except JobError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from None
+
 @app.command("list-voices")
 def list_voices(
     language: str | None = typer.Option(
@@ -398,13 +492,31 @@ def resume(
         f"({job.state.value})"
     )
 
+    # Run engine in background thread
+    run_error: Exception | None = None
+
+    def _run_job() -> None:
+        nonlocal run_error
+        try:
+            engine.resume(job_id)
+        except Exception as exc:
+            run_error = exc
+
+    run_thread = threading.Thread(target=_run_job, daemon=True)
+    run_thread.start()
+
     try:
-        engine.resume(job_id)
+        _display_progress(job.id, engine, run_thread)
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted. Job saved.[/yellow]")
+        console.print(
+            f"[dim]Resume with: audiobook-engine resume {job.id}[/dim]"
+        )
         raise typer.Exit(0) from None
-    except (EbookError, TTSBackendError, AudioAssemblyError) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+
+    # Check for errors from the run thread
+    if run_error is not None:
+        console.print(f"\n[red]Error:[/red] {run_error}")
         raise typer.Exit(1) from None
 
     console.print("[bold green]Done![/bold green]")
