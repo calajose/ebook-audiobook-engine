@@ -158,7 +158,7 @@ class MOBIParser:
                     out.write_bytes(content)
                     return out
 
-        opf_ns = "OPF"
+        opf_ns = "http://www.idpf.org/2007/opf"
         meta_entries = book.metadata.get(opf_ns, {}).get("meta", [])
         for _val, others in meta_entries:
             if others and others.get("name") == "cover":
@@ -263,6 +263,7 @@ class MOBIParser:
         )
         author = opf_meta.get("author", "")
         language = opf_meta.get("language", "en")
+        cover_path = self._extract_html_cover(html_path.parent, source_path)
 
         # Try to read TOC from toc.ncx (sibling of HTML)
         ncx_path = html_path.parent / "toc.ncx"
@@ -275,6 +276,7 @@ class MOBIParser:
             author=author,
             language=language,
             chapters=chapters,
+            cover_path=cover_path,
             source_path=source_path,
         )
 
@@ -292,6 +294,59 @@ class MOBIParser:
             if text:
                 return text
         return ""
+
+    # ------------------------------------------------------------------
+    # HTML cover extraction (for MOBI v7/AZW files)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_html_cover(
+        content_dir: Path, source_path: Path
+    ) -> Path | None:
+        """Extract cover image from OPF metadata for HTML-path MOBI."""
+        opf_path = content_dir / "content.opf"
+        if not opf_path.exists():
+            return None
+
+        try:
+            tree = ET.parse(opf_path)
+        except (ET.ParseError, OSError):
+            return None
+
+        root = tree.getroot()
+        ns = {
+            "dc": "http://purl.org/dc/elements/1.1/",
+            "opf": "http://www.idpf.org/2007/opf",
+        }
+
+        # 1. Get cover ID
+        cover_meta = root.find(".//opf:meta[@name='cover']", ns)
+        if cover_meta is None:
+            return None
+
+        cover_id = cover_meta.get("content")
+        if not cover_id:
+            return None
+
+        # 2. Get item href
+        item = root.find(f".//opf:item[@id='{cover_id}']", ns)
+        if item is None:
+            return None
+
+        href = item.get("href")
+        if not href:
+            return None
+
+        # 3. Path to image
+        img_path = content_dir / href
+        if not img_path.exists():
+            return None
+
+        # 4. Copy
+        suffix = img_path.suffix or ".jpg"
+        out = source_path.parent / f"{source_path.stem}_cover{suffix}"
+        shutil.copy2(img_path, out)
+        return out
 
     # ------------------------------------------------------------------
     # OPF metadata extraction (for MOBI v7 HTML path)
@@ -432,12 +487,23 @@ class MOBIParser:
             if start < 0:
                 continue
 
+            # Retroceder al '<' que abre la etiqueta contenedora del anchor
+            tag_start = html_content.rfind("<", 0, start)
+            if tag_start >= 0:
+                start = tag_start
+
             # End is the next anchor or end of content
             if idx + 1 < len(ncx_entries):
-                next_anchor = f'filepos{ncx_entries[idx + 1][1]}'
-                end = html_content.find(next_anchor, start + 1)
-                if end < 0:
-                    end = len(html_content)
+                next_anchor_id = f'filepos{ncx_entries[idx + 1][1]}'
+                next_pos = html_content.find(f'id="{next_anchor_id}"')
+                if next_pos < 0:
+                    next_pos = html_content.find(f"id='{next_anchor_id}'")
+                if next_pos >= 0:
+                    end = html_content.rfind("<", 0, next_pos)
+                else:
+                    end = html_content.find(f"filepos{ncx_entries[idx + 1][1]}", start + 1)
+                    if end < 0:
+                        end = len(html_content)
             else:
                 end = len(html_content)
 
@@ -526,7 +592,7 @@ class MOBIParser:
         text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
         text = re.sub(r"<p[^>]*>", "\n", text, flags=re.IGNORECASE)
         text = re.sub(r"</p>", "\n", text, flags=re.IGNORECASE)
-        text = re.sub(r"<[^>]+>", "", text)
+        text = re.sub(r"<[^>]+>", "", text, flags=re.DOTALL)
         text = html.unescape(text)
         return text.strip()
 

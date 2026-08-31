@@ -47,6 +47,7 @@ class ChapterAnalysis:
     chars: int
     words: int
     chunks: int
+    text_chunks: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,7 @@ class AudiobookEngine:
         source_path: Path,
         chapter_indices: list[int] | None = None,
         max_chars: int = 500,
+        preview_index: int | None = None,
     ) -> BookAnalysis:
         """Analyze an ebook without generating audio.
 
@@ -107,6 +109,7 @@ class AudiobookEngine:
             total_chars = 0
             total_words = 0
             total_chunks = 0
+            text_chunks: list[str] = []
 
             for seg in ch.segments:
                 cleaned = normalize(seg.text)
@@ -114,6 +117,8 @@ class AudiobookEngine:
                 total_chars += len(cleaned)
                 total_words += len(cleaned.split())
                 total_chunks += len(chunks)
+                if preview_index is not None and ch.index == preview_index:
+                    text_chunks.extend(chunks)
 
             chapter_analyses.append(
                 ChapterAnalysis(
@@ -124,6 +129,7 @@ class AudiobookEngine:
                     chars=total_chars,
                     words=total_words,
                     chunks=total_chunks,
+                    text_chunks=tuple(text_chunks),
                 )
             )
 
@@ -164,20 +170,25 @@ class AudiobookEngine:
         chapter_pause_ms: int = 2500,
         scene_break_pause_ms: int = 1500,
         chapter_title_pause_ms: int = 1200,
+        chapter_indices: list[int] | None = None,
         keep_intermediates: bool = False,
     ) -> AudiobookJob:
         """Create a new conversion job from an ebook file."""
         book = self.inspect(source_path)
+        raw_backend = getattr(self._tts, "name", "kokoro")
+        backend_name = raw_backend if isinstance(raw_backend, str) else "kokoro"
         job = AudiobookJob(
             source_path=source_path,
             book_title=book.title,
             language=language,
             voice=voice,
+            backend=backend_name,
             speed=speed,
             paragraph_pause_ms=paragraph_pause_ms,
             chapter_pause_ms=chapter_pause_ms,
             scene_break_pause_ms=scene_break_pause_ms,
             chapter_title_pause_ms=chapter_title_pause_ms,
+            chapter_indices=chapter_indices,
             output_path=output_path,
             keep_intermediates=keep_intermediates,
             work_dir=self._work_dir / "jobs",
@@ -226,9 +237,18 @@ class AudiobookEngine:
         # Phase 1: Analyze (skip if resuming)
         if job.state == JobState.CREATED:
             job.transition(JobState.ANALYZING)
+
+            # Filter chapters if job has specific selection
+            chapters_to_process = book.chapters
+            if job.chapter_indices is not None:
+                chapters_to_process = tuple(
+                    ch for ch in book.chapters
+                    if ch.index in job.chapter_indices
+                )
+
             job.total_segments = sum(
                 len(chunk_text(normalize(seg.text)))
-                for ch in book.chapters
+                for ch in chapters_to_process
                 for seg in ch.segments
             )
             job.transition(JobState.READY)
@@ -264,6 +284,10 @@ class AudiobookEngine:
         segments_dir.mkdir(parents=True, exist_ok=True)
 
         for ch in book.chapters:
+            # Skip if chapter index is not in the selection
+            if job.chapter_indices is not None and ch.index not in job.chapter_indices:
+                continue
+
             ch_dir = work_dir / "chapters" / f"ch_{ch.index:04d}"
             ch_dir.mkdir(parents=True, exist_ok=True)
 
@@ -338,9 +362,16 @@ class AudiobookEngine:
         if ffmpeg.is_available():
             book = self._books[job.id]
             voice = job.voice
-            backend = job.backend
+            raw_backend = (
+                job.backend or getattr(self._tts, "name", "kokoro")
+            )
+            backend = (
+                raw_backend
+                if isinstance(raw_backend, str) and raw_backend
+                else "kokoro"
+            )
             narrator = (
-                f"{voice} - {backend}" if voice and backend else ""
+                f"{voice} - {backend}" if voice and backend else voice
             )
             try:
                 assemble_m4b(

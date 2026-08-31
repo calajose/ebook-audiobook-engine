@@ -87,21 +87,81 @@ class EPUBParser:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _save_item_as_cover(
+        item: epub.EpubItem | None, book: epub.EpubBook, source_path: Path
+    ) -> Path | None:
+        if item is None:
+            return None
+        content = item.get_content()
+        if not content:
+            return None
+
+        item_name = item.get_name() or ""
+        media_type = getattr(item, "media_type", "") or ""
+        suffix = Path(item_name).suffix.lower()
+        image_suffixes = (".jpg", ".jpeg", ".png", ".gif", ".webp")
+        is_image = (
+            item.get_type() == ebooklib.ITEM_IMAGE
+            or media_type.startswith("image/")
+            or suffix in image_suffixes
+        )
+
+        if is_image:
+            ext = suffix or ".jpg"
+            out = source_path.parent / f"{source_path.stem}_cover{ext}"
+            out.write_bytes(content)
+            return out
+
+        is_html = (
+            suffix in (".xhtml", ".html", ".htm")
+            or "html" in media_type.lower()
+            or b"<html" in content[:100].lower()
+        )
+        if is_html:
+            html_text = content.decode("utf-8", errors="replace")
+            img_match = re.search(
+                r'<img[^>]+src=["\']([^"\']+)["\']',
+                html_text,
+                re.IGNORECASE,
+            )
+            if img_match:
+                img_src = img_match.group(1)
+                img_filename = Path(img_src).name.lower()
+                for sub_item in book.get_items():
+                    sub_name = sub_item.get_name() or ""
+                    sub_media = getattr(sub_item, "media_type", "") or ""
+                    sub_suffix = Path(sub_name).suffix.lower()
+                    sub_is_image = (
+                        sub_item.get_type() == ebooklib.ITEM_IMAGE
+                        or sub_media.startswith("image/")
+                        or sub_suffix in image_suffixes
+                    )
+                    matches_name = (
+                        sub_name.lower().endswith(img_filename)
+                        or img_filename in sub_name.lower()
+                    )
+                    if sub_is_image and matches_name:
+                        sub_content = sub_item.get_content()
+                        if sub_content:
+                            sub_ext = sub_suffix or ".jpg"
+                            out = (
+                                source_path.parent
+                                / f"{source_path.stem}_cover{sub_ext}"
+                            )
+                            out.write_bytes(sub_content)
+                            return out
+        return None
+
+    @staticmethod
     def _extract_cover(
         book: epub.EpubBook, source_path: Path
     ) -> Path | None:
         # EPUB3: look for EpubCover items (properties="cover-image")
         for item in book.get_items():
             if isinstance(item, epub.EpubCover):
-                content = item.get_content()
-                if content:
-                    suffix = Path(item.get_name()).suffix or ".jpg"
-                    out = (
-                        source_path.parent
-                        / f"{source_path.stem}_cover{suffix}"
-                    )
-                    out.write_bytes(content)
-                    return out
+                res = EPUBParser._save_item_as_cover(item, book, source_path)
+                if res:
+                    return res
 
         # EPUB2 fallback: look in OPF meta metadata
         opf_ns = "OPF"
@@ -111,31 +171,44 @@ class EPUBParser:
                 cover_id = others.get("content", "")
                 if cover_id:
                     item = book.get_item_with_id(cover_id)
-                    if item is not None:
-                        content = item.get_content()
-                        if content:
-                            suffix = (
-                                Path(item.get_name()).suffix or ".jpg"
-                            )
-                            out = (
-                                source_path.parent
-                                / f"{source_path.stem}_cover{suffix}"
-                            )
-                            out.write_bytes(content)
-                            return out
+                    res = EPUBParser._save_item_as_cover(item, book, source_path)
+                    if res:
+                        return res
 
         # Direct fallback: try item with id="cover" regardless of metadata
         item = book.get_item_with_id("cover")
-        if item is not None:
-            content = item.get_content()
-            if content:
-                suffix = Path(item.get_name()).suffix or ".jpg"
-                out = (
-                    source_path.parent
-                    / f"{source_path.stem}_cover{suffix}"
-                )
-                out.write_bytes(content)
-                return out
+        res = EPUBParser._save_item_as_cover(item, book, source_path)
+        if res:
+            return res
+
+        # Fallback: item ID or filename contains "cover" (case-insensitive)
+        for item in book.get_items():
+            item_id = item.get_id() or ""
+            item_name = item.get_name() or ""
+            if "cover" in item_id.lower() or "cover" in Path(item_name).name.lower():
+                res = EPUBParser._save_item_as_cover(item, book, source_path)
+                if res:
+                    return res
+
+        # Fallback: first image item in the book
+        for item in book.get_items():
+            media_type = getattr(item, "media_type", "") or ""
+            item_name = item.get_name() or ""
+            suffix = Path(item_name).suffix.lower()
+            is_image = (
+                item.get_type() == ebooklib.ITEM_IMAGE
+                or media_type.startswith("image/")
+                or suffix in (".jpg", ".jpeg", ".png", ".gif", ".webp")
+            )
+            if is_image:
+                content = item.get_content()
+                if content:
+                    out = (
+                        source_path.parent
+                        / f"{source_path.stem}_cover{suffix or '.jpg'}"
+                    )
+                    out.write_bytes(content)
+                    return out
 
         return None
 
@@ -220,7 +293,7 @@ class EPUBParser:
         text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
         text = re.sub(r"<p[^>]*>", "\n", text, flags=re.IGNORECASE)
         text = re.sub(r"</p>", "\n", text, flags=re.IGNORECASE)
-        text = re.sub(r"<[^>]+>", "", text)
+        text = re.sub(r"<[^>]+>", "", text, flags=re.DOTALL)
         text = html.unescape(text)
         return text.strip()
 

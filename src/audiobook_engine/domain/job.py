@@ -84,6 +84,7 @@ class AudiobookJob:
     # Progress
     total_segments: int = 0
     completed_segments: int = 0
+    chapter_indices: list[int] | None = None
 
     # Cleanup control
     keep_intermediates: bool = False

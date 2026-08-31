@@ -7,6 +7,7 @@ available voices, and resuming interrupted jobs.
 from __future__ import annotations
 
 import logging
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING
 import typer
 from rich.console import Console
 from rich.logging import RichHandler
+from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -179,6 +181,12 @@ def convert(
     work_dir: str | None = typer.Option(
         None, "--work-dir", "-w", help="Working directory for temp files."
     ),
+    chapters: str | None = typer.Option(
+        None,
+        "--chapters",
+        "-c",
+        help="Comma-separated chapter indices to convert (e.g. '0,2,5' or '1-3').",
+    ),
     keep_intermediates: bool = typer.Option(
         False,
         "--keep-intermediates",
@@ -214,6 +222,15 @@ def convert(
     )
 
     try:
+        chapter_indices = _parse_chapter_indices(chapters) if chapters else None
+    except ValueError:
+        console.print("[red]Error:[/red] Invalid chapter specification.")
+        raise typer.Exit(1) from None
+
+    if chapter_indices:
+        console.print(f"[bold]Selected chapters:[/bold] {chapters}")
+
+    try:
         with console.status("[bold green]Creating job..."):
             job = engine.create_job(
                 source_path=source,
@@ -224,6 +241,7 @@ def convert(
                 paragraph_pause_ms=paragraph_pause,
                 chapter_pause_ms=chapter_pause,
                 scene_break_pause_ms=scene_break_pause,
+                chapter_indices=chapter_indices,
                 keep_intermediates=keep_intermediates,
             )
     except (TTSBackendError, JobError) as exc:
@@ -364,6 +382,12 @@ def inspect(
         "--max-chars",
         help="Max characters per TTS chunk (default: 500).",
     ),
+    preview: int | None = typer.Option(
+        None,
+        "--preview",
+        "-p",
+        help="Show TTS text chunks for a specific chapter index.",
+    ),
     work_dir: str | None = typer.Option(
         None, "--work-dir", "-w", help="Working directory."
     ),
@@ -383,7 +407,9 @@ def inspect(
     engine = _create_engine(work_dir, source)
     with console.status("[bold green]Analyzing ebook..."):
         try:
-            result = engine.analyze(source, chapter_indices, max_chars)
+            result = engine.analyze(
+                source, chapter_indices, max_chars, preview_index=preview
+            )
         except EbookError as exc:
             console.print(f"[red]Error:[/red] {exc}")
             raise typer.Exit(1) from None
@@ -395,6 +421,17 @@ def inspect(
     console.print(f"[bold]Title:[/bold] {book_data.title}")
     console.print(f"[bold]Author:[/bold] {book_data.author}")
     console.print(f"[bold]Language:[/bold] {book_data.language}")
+    has_cover = (
+        book_data.cover_path is not None
+        and getattr(book_data.cover_path, "exists", lambda: True)()
+    )
+    if has_cover and book_data.cover_path is not None:
+        cover_name = getattr(
+            book_data.cover_path, "name", str(book_data.cover_path)
+        )
+        console.print(f"[bold]Cover:[/bold] {cover_name}")
+    else:
+        console.print("[bold]Cover:[/bold] None")
     console.print(
         f"[bold]Chapters:[/bold] "
         f"{len(chapter_analyses)}"
@@ -427,6 +464,31 @@ def inspect(
         )
 
     console.print(table)
+
+    if preview is not None:
+        for ca in chapter_analyses:
+            if ca.index == preview:
+                if not ca.text_chunks:
+                    console.print(
+                        f"\n[yellow]No text chunks for chapter {preview}[/yellow]"
+                    )
+                else:
+                    console.print(
+                        f"\n[bold cyan]Chapter {ca.index}:[/bold cyan] "
+                        f"{ca.title} ({len(ca.text_chunks)} chunks)"
+                    )
+                    for i, chunk in enumerate(ca.text_chunks):
+                        console.print(
+                            Panel(
+                                chunk,
+                                title=f"Chunk {i + 1}/{len(ca.text_chunks)}",
+                                border_style="dim",
+                                padding=(0, 1),
+                            )
+                        )
+                break
+        else:
+            console.print(f"\n[red]Chapter {preview} not found.[/red]")
 
     if warnings:
         console.print()
@@ -575,7 +637,12 @@ def list_voices(
 
 @app.command()
 def resume(
-    job_id: str = typer.Argument(..., help="Job ID to resume."),
+    job_id: str | None = typer.Argument(
+        None, help="Job ID to resume (omitting lists all jobs)."
+    ),
+    work_dir: str | None = typer.Option(
+        None, "--work-dir", "-w", help="Working directory."
+    ),
     keep_intermediates: bool = typer.Option(
         False,
         "--keep-intermediates",
@@ -585,27 +652,80 @@ def resume(
         False, "--verbose", "-V", help="Enable verbose logging."
     ),
 ) -> None:
-    """Resume a previously interrupted job."""
+    """Resume a previously interrupted job, or list all jobs."""
     _setup_logging(verbose)
 
-    engine = _create_engine(None)
+    engine = _create_engine(work_dir)
+    base_work = Path(work_dir) if work_dir else Path("work")
+    jobs_dir = base_work / "jobs"
+
+    if job_id is None:
+        from audiobook_engine.infrastructure.persistence.job_store import (
+            find_all_jobs,
+        )
+
+        all_jobs = find_all_jobs(jobs_dir)
+        if not all_jobs:
+            console.print("[yellow]No jobs found.[/yellow]")
+            raise typer.Exit(0)
+
+        table = Table(title="All Jobs")
+        table.add_column("Job ID", style="cyan")
+        table.add_column("Book Title", style="green")
+        table.add_column("State", style="yellow")
+        table.add_column("Progress", justify="right")
+        table.add_column("Created", style="dim")
+
+        for jid, job in all_jobs:
+            title = job.book_title or "—"
+            total = job.total_segments or 1
+            pct = job.completed_segments / total * 100
+            progress_str = (
+                f"{job.completed_segments}/{job.total_segments} "
+                f"({pct:.1f}%)"
+            )
+            created_str = job.created_at.strftime("%Y-%m-%d %H:%M:%S")
+
+            state_style = "yellow"
+            if job.state == JobState.COMPLETED:
+                state_style = "bold green"
+            elif job.state == JobState.FAILED:
+                state_style = "bold red"
+            elif job.state == JobState.CANCELLED:
+                state_style = "dim"
+            elif job.state == JobState.CREATED:
+                state_style = "cyan"
+
+            table.add_row(
+                jid,
+                title,
+                f"[{state_style}]{job.state.value}[/{state_style}]",
+                progress_str,
+                created_str,
+            )
+
+        console.print(table)
+        console.print(
+            "\n[dim]Resume with: audiobook-engine resume <job-id>[/dim]"
+        )
+        return
 
     try:
         job = engine.get_job(job_id)
     except JobError:
-        # Try loading from default work directory
+        # Try loading from default/specified work directory
         from audiobook_engine.infrastructure.persistence.job_store import (
             load_job,
         )
 
-        work = Path("work") / "jobs" / job_id
+        work = jobs_dir / job_id
         if not work.exists():
             console.print(f"[red]Error:[/red] Job not found: {job_id}")
             raise typer.Exit(1) from None
         job = load_job(work)
         # Re-create engine with correct parser for source format
         if job.source_path is not None:
-            engine = _create_engine(None, job.source_path)
+            engine = _create_engine(work_dir, job.source_path)
         engine._jobs[job.id] = job
         if job.source_path is not None:
             engine._books[job.id] = engine.inspect(job.source_path)
@@ -652,3 +772,46 @@ def resume(
         raise typer.Exit(1) from None
 
     console.print("[bold green]Done![/bold green]")
+
+
+@app.command()
+def clean(
+    work_dir: str | None = typer.Option(
+        None,
+        "--work-dir",
+        "-w",
+        help="Working directory to clean (default: 'work').",
+    ),
+    job_id: str | None = typer.Argument(
+        None,
+        help="Job ID to clean (removes only that job).",
+    ),
+) -> None:
+    """Clean the working directory or a specific job."""
+    work_path = Path(work_dir) if work_dir else Path("work")
+    if not work_path.exists():
+        console.print(
+            f"[yellow]Working directory '{work_path}' does not exist.[/yellow]"
+        )
+        raise typer.Exit(0)
+
+    if job_id:
+        job_path = work_path / "jobs" / job_id
+        if not job_path.exists():
+            console.print(
+                f"[yellow]Job '{job_id}' not found in '{work_path}'.[/yellow]"
+            )
+            raise typer.Exit(0)
+        try:
+            shutil.rmtree(job_path)
+            console.print(f"[green]Cleaned job:[/green] {job_id}")
+        except Exception as exc:
+            console.print(f"[red]Error cleaning job '{job_id}':[/red] {exc}")
+            raise typer.Exit(1) from None
+    else:
+        try:
+            shutil.rmtree(work_path)
+            console.print(f"[green]Cleaned working directory:[/green] {work_path}")
+        except Exception as exc:
+            console.print(f"[red]Error cleaning working directory:[/red] {exc}")
+            raise typer.Exit(1) from None

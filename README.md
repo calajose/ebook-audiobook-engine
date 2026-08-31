@@ -1,6 +1,6 @@
 # ebook-audiobook-engine
 
-> **Version: v0.5.1** — Local audiobook conversion engine with configurable prosody, smart dialogue chunking, and pluggable TTS backends.
+> **Version: v0.5.2** — Local audiobook conversion engine with configurable prosody, smart dialogue chunking, and pluggable TTS backends.
 
 Developed in [OpenCode](https://opencode.ai) through human-guided orchestration of Mimo V2.5, Gemini 3.5 Flash Lite, Gemini 3.7 Flash, Gemini 3.1 Pro, and minor assistance from auxiliary models.
 
@@ -99,6 +99,9 @@ audiobook-engine capabilities
 # Inspect an ebook
 audiobook-engine inspect book.epub
 
+# Preview the exact TTS text for chapter 3
+audiobook-engine inspect book.epub --preview 3
+
 # Convert EPUB with default prosody
 audiobook-engine convert book.epub -v ef_dora -o book.m4b
 
@@ -122,6 +125,9 @@ audiobook-engine resume <job-id>
 
 # Clean working directory
 audiobook-engine clean
+
+# Clean only a specific job
+audiobook-engine clean <job-id>
 
 # Re-assemble completed job (without re-synthesizing)
 audiobook-engine reassemble <job-id>
@@ -151,6 +157,7 @@ audiobook-engine convert book.epub -v ef_dora -o book.m4b --keep-intermediates
 | `--paragraph-pause` | | `700` | Pause duration between paragraphs in milliseconds |
 | `--chapter-pause` | | `2500` | Pause duration between chapters in milliseconds |
 | `--scene-break-pause` | | `1500` | Pause duration for scene breaks in milliseconds |
+| `--chapters` | `-c` | None | Comma-separated chapter indices to convert (e.g. '0,2,5' or '1-3') |
 | `--work-dir` | `-w` | `work/` | Temporary directory for job artifacts and cache |
 | `--keep-intermediates` | | `False` | Keep intermediate WAV files after conversion (cleaned by default) |
 | `--verbose` | `-V` | `False` | Enable debug logging |

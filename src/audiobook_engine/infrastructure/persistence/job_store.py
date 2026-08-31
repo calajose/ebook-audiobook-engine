@@ -33,6 +33,7 @@ def _serialize(job: AudiobookJob) -> dict[str, object]:
         "output_path": str(job.output_path) if job.output_path else None,
         "total_segments": job.total_segments,
         "completed_segments": job.completed_segments,
+        "chapter_indices": job.chapter_indices,
         "error_message": job.error_message,
         "created_at": job.created_at.isoformat(),
         "updated_at": job.updated_at.isoformat(),
@@ -59,6 +60,11 @@ def _deserialize(data: dict[str, object]) -> AudiobookJob:
         output_path=Path(str(data["output_path"])) if data.get("output_path") else None,
         total_segments=int(str(data.get("total_segments", 0))),
         completed_segments=int(str(data.get("completed_segments", 0))),
+        chapter_indices=(
+            data["chapter_indices"]
+            if isinstance(data.get("chapter_indices"), list)
+            else None
+        ),
         error_message=str(data["error_message"]) if data.get("error_message") else None,
         created_at=datetime.fromisoformat(str(data["created_at"])),
         updated_at=datetime.fromisoformat(str(data["updated_at"])),
@@ -105,6 +111,30 @@ def find_resumable_jobs(work_dir: Path) -> list[tuple[str, AudiobookJob]]:
             job = load_job(entry)
             if job.can_resume():
                 results.append((job.id, job))
+        except (FileNotFoundError, ValueError, KeyError):
+            continue
+
+    return results
+
+
+def find_all_jobs(work_dir: Path) -> list[tuple[str, AudiobookJob]]:
+    """Find all jobs in the work directory, regardless of state.
+
+    Returns a list of (job_id, job) tuples.
+    """
+    if not work_dir.exists():
+        return []
+
+    results: list[tuple[str, AudiobookJob]] = []
+    for entry in sorted(work_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        job_json = entry / "job.json"
+        if not job_json.exists():
+            continue
+        try:
+            job = load_job(entry)
+            results.append((job.id, job))
         except (FileNotFoundError, ValueError, KeyError):
             continue
 

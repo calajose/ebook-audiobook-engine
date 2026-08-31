@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import struct
 import wave
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 import pytest
 
@@ -32,6 +35,8 @@ def _make_fake_wav(path: Path) -> None:
 
 class FakeTTSBackend:
     """Mock TTS backend that writes fake WAV files."""
+
+    name: str = "fake"
 
     def capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
@@ -119,6 +124,7 @@ class TestCreateJob:
         assert job.book_title == "Test Book"
         assert job.language == "en-us"
         assert job.voice == "af_sarah"
+        assert job.backend == "fake"
         assert job.source_path == sample_epub
 
     def test_get_job(

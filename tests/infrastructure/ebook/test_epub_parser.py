@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from ebooklib import epub  # type: ignore[import-untyped]
 from tests.fixtures.epub_builder import build_epub
 
 from audiobook_engine.domain.exceptions import EbookError
@@ -218,3 +219,79 @@ class TestEdgeCases:
         assert len(parsed.chapters) == 2
         assert parsed.chapters[0].title == "Chapter One"
         assert parsed.chapters[1].title == "Chapter Two"
+
+
+class TestCoverFallback:
+    def test_cover_detected_by_id_substring(
+        self, parser: EPUBParser, tmp_path: Path
+    ) -> None:
+        """Cover is detected when ID contains 'cover' even without standard metadata."""
+        path = tmp_path / "cover_fallback.epub"
+        book = epub.EpubBook()
+        book.set_identifier("test-123")
+        book.set_title("Cover Fallback")
+        book.set_language("en")
+
+        ch = epub.EpubHtml(title="Ch 1", file_name="ch1.xhtml", lang="en")
+        ch.id = "ch1"
+        ch.set_content("<html><body><p>Hello</p></body></html>")
+        book.add_item(ch)
+        book.spine = ["nav", ch]
+
+        img = epub.EpubItem(
+            uid="cover-image",
+            file_name="cover.jpg",
+            media_type="image/jpeg",
+            content=b"\xff\xd8\xff\xe0fakejpeg",
+        )
+        book.add_item(img)
+
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
+        epub.write_epub(str(path), book)
+
+        parsed = parser.inspect(path)
+        assert parsed.cover_path is not None
+        assert parsed.cover_path.exists()
+        assert "cover" in parsed.cover_path.name
+
+    def test_cover_extracted_from_xhtml_wrapper(
+        self, parser: EPUBParser, tmp_path: Path
+    ) -> None:
+        """When cover points to an XHTML page, underlying image is extracted."""
+        path = tmp_path / "xhtml_cover.epub"
+        book = epub.EpubBook()
+        book.set_identifier("test-456")
+        book.set_title("XHTML Cover")
+        book.set_language("en")
+
+        ch = epub.EpubHtml(title="Ch 1", file_name="ch1.xhtml", lang="en")
+        ch.id = "ch1"
+        ch.set_content("<html><body><p>Hello</p></body></html>")
+        book.add_item(ch)
+        book.spine = ["nav", ch]
+
+        cover_xhtml = epub.EpubHtml(title="Cover", file_name="cover.xhtml", lang="en")
+        cover_xhtml.id = "cover"
+        cover_xhtml.set_content('<html><body><img src="cover.jpg"/></body></html>')
+        book.add_item(cover_xhtml)
+
+        img = epub.EpubItem(
+            uid="img1",
+            file_name="cover.jpg",
+            media_type="image/jpeg",
+            content=b"\xff\xd8\xff\xe0fakejpeg",
+        )
+        book.add_item(img)
+
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
+        epub.write_epub(str(path), book)
+
+        parsed = parser.inspect(path)
+        assert parsed.cover_path is not None
+        assert parsed.cover_path.exists()
+        assert parsed.cover_path.suffix.lower() in (".jpg", ".jpeg", ".png")
+        assert parsed.cover_path.read_bytes() == b"\xff\xd8\xff\xe0fakejpeg"
+
+

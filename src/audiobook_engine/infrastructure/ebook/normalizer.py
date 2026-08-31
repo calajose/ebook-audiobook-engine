@@ -29,7 +29,7 @@ _NOISE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^Copyright\s+©", re.IGNORECASE),
     re.compile(r"^All rights reserved\.?$", re.IGNORECASE),
     # Separator lines: "***", "---", "• • •"
-    re.compile(r"^[\s*•\-]{3,}$"),
+    re.compile(r"^[\s*•\-\u2013\u2014]{3,}$"),
 ]
 
 

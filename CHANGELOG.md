@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Chapter Selection (`convert` command)**:
+  - Added `--chapters / -c` option to `convert` command, allowing conversion of specific chapters or ranges (e.g., `5-26,29`), skipping others during synthesis and assembly.
+  - Automatically filters chapters during segment counting and synthesis.
+- **Selective Job Cleanup (`clean` command)**:
+  - Added optional `job_id` argument to `audiobook-engine clean` to remove only a specific job instead of the entire working directory.
+  - When no `job_id` is provided, behaves as before (removes the entire work directory).
+
+### Fixed
+- **Section Separator Noise Removal**:
+  - Fixed noise detection pattern to also filter out separators made of em-dashes (`—————`, U+2014) and en-dashes (`———`, U+2013), which some ebooks use as decorative section dividers. Previously only standard hyphens (`-`) were detected, causing TTS to attempt reading these separators.
+
+---
+
+## [0.5.2] - 2026-08-31
+
+### Added
+- **Job Listing (`resume` without ID)**:
+  - Expanded `resume` command listing to show ALL jobs in the working directory, including completed, failed, and cancelled jobs, not just unfinished ones.
+  - Added visual status differentiation in the job list (e.g., bold green for completed, bold red for failed).
+
+### Fixed
+- **TTS Text Preview** (`inspect --preview`):
+  - Fixed an issue where the preview functionality was not displaying correctly.
+- **MOBI HTML Parsing**:
+  - Fixed an issue where HTML tags were leaking into the extracted text due to incorrect splitting of HTML content by NCX anchors.
+  - Added robust start and end tag detection during chapter splitting to ensure HTML tags are extracted fully and subsequently stripped.
+- **MOBI/AZW3 Cover Detection**:
+  - Fixed cover extraction for MOBI v7 books that parse via the HTML path by adding OPF metadata parsing to correctly locate cover images.
+  - Fixed cover extraction for AZW3/KF8 (EPUB path) by correcting the OPF namespace lookup in `ebooklib` metadata, allowing the parser to find the correct cover ID and manifest item.
+
+---
+
+## [0.5.1] - 2026-08-30
+
+### Added
+- **Unfinished Jobs List (`resume` without ID)**:
+  - Running `audiobook-engine resume` without a job ID now lists all unfinished/resumable jobs in a Rich table displaying Job ID, Book Title, State, Progress percentage, and Created timestamp.
+  - Added `--work-dir / -w` option support to `resume`.
+- **Work Directory Cleanup (`clean` command)**:
+  - Added `audiobook-engine clean` command to safely clear and remove temporary working directories and job artifacts, with optional `--work-dir / -w`.
+- **MOBI V7 Cover Extraction**:
+  - Added cover detection and extraction for MOBI v7 / AZW files by parsing `content.opf` metadata (`<meta name="cover">`), manifest items, and directory fallback search.
+
+### Changed
+- **CLI Inspect Output**:
+  - Updated `audiobook-engine inspect` to display `Cover: None` instead of `Cover: Not detected.` when no cover image is found.
+
+### Fixed
+- **XHTML Cover Page Resolution**:
+  - Enhanced EPUB and MOBI/AZW3 cover extraction to detect when cover metadata points to an XHTML/HTML container page instead of an image. Automatically parses the markup for `<img>` tags, extracts the underlying image asset, and ensures valid image embedding in final M4B audiobooks.
+- **AZW3 / EPUB Cover Detection Fallback**:
+  - Fixed issue where certain AZW3 books failed cover detection because their cover image items had non-standard IDs (e.g. `cover-image`) or names without explicit OPF `<meta name="cover">` tags.
+  - Added robust case-insensitive substring search for `"cover"` in item IDs/filenames and automatic fallback to the first image item in the book.
+- **M4B Narrator / Artist Metadata**:
+  - Fixed bug where `job.backend` was not populated during job creation, causing the M4B `artist` metadata tag (`voice - backend`, e.g., `ef_dora - kokoro`) to be omitted.
+  - Added robust backend name resolution and fallback to ensure narrator metadata is correctly embedded in generated audiobooks.
+
+---
+
 ## [0.5.0] - 2026-08-30
 
 ### Added

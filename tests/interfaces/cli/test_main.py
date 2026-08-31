@@ -140,3 +140,71 @@ class TestResumeCommand:
         result = runner.invoke(app, ["resume", "nonexistent"])
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
+
+    def test_resume_list_no_jobs(self, tmp_path: Path) -> None:
+        result = runner.invoke(app, ["resume", "--work-dir", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "No jobs found" in result.output
+
+    def test_resume_list_with_resumable_jobs(self, tmp_path: Path) -> None:
+        from audiobook_engine.domain.job import AudiobookJob, JobState
+        from audiobook_engine.infrastructure.persistence.job_store import save_job
+
+        job_dir = tmp_path / "jobs" / "job123"
+        job = AudiobookJob(
+            id="job123",
+            state=JobState.SYNTHESIZING,
+            book_title="My Test Book",
+            work_dir=job_dir,
+            total_segments=10,
+            completed_segments=3,
+        )
+        save_job(job, job_dir)
+
+        result = runner.invoke(app, ["resume", "--work-dir", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "job123" in result.output
+        assert "My Test Book" in result.output
+        assert "synthesizing" in result.output
+
+
+class TestCleanCommand:
+    def test_clean_existing_work_dir(self, tmp_path: Path) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "some_file.txt").write_text("debris")
+
+        result = runner.invoke(app, ["clean", "--work-dir", str(work)])
+        assert result.exit_code == 0
+        assert not work.exists()
+        assert "Cleaned working directory" in result.output
+
+    def test_clean_nonexistent_work_dir(self, tmp_path: Path) -> None:
+        work = tmp_path / "nonexistent"
+        result = runner.invoke(app, ["clean", "--work-dir", str(work)])
+        assert result.exit_code == 0
+        assert "does not exist" in result.output
+
+    def test_clean_specific_job(self, tmp_path: Path) -> None:
+        work = tmp_path / "work"
+        jobs = work / "jobs"
+        job1 = jobs / "job-aaa"
+        job2 = jobs / "job-bbb"
+        job1.mkdir(parents=True)
+        job2.mkdir(parents=True)
+        (job1 / "job.json").write_text("{}")
+        (job2 / "job.json").write_text("{}")
+
+        result = runner.invoke(app, ["clean", "--work-dir", str(work), "job-aaa"])
+        assert result.exit_code == 0
+        assert not job1.exists()
+        assert job2.exists()
+        assert "Cleaned job" in result.output
+
+    def test_clean_nonexistent_job(self, tmp_path: Path) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = runner.invoke(app, ["clean", "--work-dir", str(work), "no-such-job"])
+        assert result.exit_code == 0
+        assert "not found" in result.output

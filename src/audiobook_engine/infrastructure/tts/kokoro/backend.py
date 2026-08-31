@@ -58,6 +58,8 @@ class KokoroBackend:
     in the user cache directory. They are never part of the repository.
     """
 
+    name: str = "kokoro"
+
     def __init__(
         self,
         model_path: Path | None = None,
@@ -73,7 +75,7 @@ class KokoroBackend:
             return self._kokoro
 
         try:
-            from kokoro_onnx import Kokoro  # type: ignore[import-untyped]
+            from kokoro_onnx import Kokoro
         except ImportError as exc:
             raise TTSBackendError(
                 "kokoro-onnx is not installed. "

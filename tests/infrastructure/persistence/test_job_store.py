@@ -133,3 +133,41 @@ class TestFindResumableJobs:
         (tmp_path / "not-a-job").mkdir()
         results = find_resumable_jobs(tmp_path)
         assert results == []
+
+
+class TestFindAllJobs:
+    def test_finds_all_states(self, tmp_path: Path) -> None:
+        states = [
+            JobState.CREATED,
+            JobState.SYNTHESIZING,
+            JobState.COMPLETED,
+            JobState.FAILED,
+        ]
+        for i, state in enumerate(states):
+            work = tmp_path / "jobs" / f"j{i}"
+            job = _make_job(job_id=f"j{i}", state=state, work_dir=work)
+            save_job(job, work)
+
+        from audiobook_engine.infrastructure.persistence.job_store import (
+            find_all_jobs,
+        )
+
+        results = find_all_jobs(tmp_path / "jobs")
+        assert len(results) == len(states)
+
+    def test_nonexistent_dir_returns_empty(self, tmp_path: Path) -> None:
+        from audiobook_engine.infrastructure.persistence.job_store import (
+            find_all_jobs,
+        )
+
+        results = find_all_jobs(tmp_path / "nope")
+        assert results == []
+
+    def test_ignores_dirs_without_job_json(self, tmp_path: Path) -> None:
+        (tmp_path / "not-a-job").mkdir()
+        from audiobook_engine.infrastructure.persistence.job_store import (
+            find_all_jobs,
+        )
+
+        results = find_all_jobs(tmp_path)
+        assert results == []

@@ -48,11 +48,13 @@ def _make_book_analysis(
     language: str = "en",
     chapters: list[ChapterAnalysis] | None = None,
     warnings: list[str] | None = None,
+    cover_path: Path | None = None,
 ) -> BookAnalysis:
     mock_book = MagicMock()
     mock_book.title = title
     mock_book.author = author
     mock_book.language = language
+    mock_book.cover_path = cover_path
     mock_book.chapters = [MagicMock() for _ in (chapters or [])]
     return BookAnalysis(
         book=mock_book,
@@ -234,3 +236,33 @@ class TestInspectCommand:
         assert "1,200" in result.output  # total chars
         assert "190" in result.output  # total words
         assert "5" in result.output  # total chunks
+
+    @patch("audiobook_engine.interfaces.cli.main.AudiobookEngine")
+    def test_inspect_shows_no_cover(
+        self, mock_engine_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        epub = tmp_path / "test.epub"
+        epub.write_text("fake epub")
+
+        mock_engine = mock_engine_cls.return_value
+        mock_engine.analyze.return_value = _make_book_analysis(cover_path=None)
+
+        result = runner.invoke(app, ["inspect", str(epub)])
+        assert result.exit_code == 0
+        assert "Cover: None" in result.output
+
+    @patch("audiobook_engine.interfaces.cli.main.AudiobookEngine")
+    def test_inspect_shows_cover_filename(
+        self, mock_engine_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        epub = tmp_path / "test.epub"
+        epub.write_text("fake epub")
+        cover = tmp_path / "test_cover.jpg"
+        cover.write_bytes(b"fake image")
+
+        mock_engine = mock_engine_cls.return_value
+        mock_engine.analyze.return_value = _make_book_analysis(cover_path=cover)
+
+        result = runner.invoke(app, ["inspect", str(epub)])
+        assert result.exit_code == 0
+        assert "Cover: test_cover.jpg" in result.output
