@@ -7,19 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.6.0] - 2026-08-31
 
 ### Added
-- **Chapter Selection (`convert` command)**:
-  - Added `--chapters / -c` option to `convert` command, allowing conversion of specific chapters or ranges (e.g., `5-26,29`), skipping others during synthesis and assembly.
-  - Automatically filters chapters during segment counting and synthesis.
-- **Selective Job Cleanup (`clean` command)**:
-  - Added optional `job_id` argument to `audiobook-engine clean` to remove only a specific job instead of the entire working directory.
-  - When no `job_id` is provided, behaves as before (removes the entire work directory).
+- **GPU Acceleration via NVIDIA CUDA**:
+  - New `--device cuda` option for `convert`, `capabilities`, and `list-voices` commands.
+  - `--device cuda`: Forces NVIDIA CUDA GPU inference via `CUDAExecutionProvider`. Produces a clear error if CUDA EP is not available — no silent fallback to CPU.
+  - `--device auto`: Auto-selects best device with priority CUDA > OpenVINO GPU > CPU. Falls back to CPU automatically if the selected GPU provider fails (e.g. OpenVINO dynamic-shape incompatibility).
+  - `CUDAExecutionProvider` includes `CPUExecutionProvider` as fallback for unsupported operators.
+  - New optional `[cuda]` extra: `pip install ebook-audiobook-engine[cuda]` installs `onnxruntime-gpu>=1.24`.
+  - `onnxruntime-gpu` and `onnxruntime-openvino` are mutually exclusive distributions — only install one per environment.
+- **GPU Acceleration via Intel OpenVINO**:
+  - `--device openvino`: Forces OpenVINO GPU inference. Produces a clear error if OpenVINO or Intel GPU is not available — no silent fallback.
+  - New optional `[openvino]` extra: `pip install ebook-audiobook-engine[openvino]` installs `onnxruntime-openvino>=1.24`.
+- **Device Selection CLI** (`--device / -d`):
+  - Device options: `auto` (default), `cpu`, `cuda`, `openvino`.
+  - `--device auto`: Automatically selects the best available device (CUDA > OpenVINO GPU > CPU). Falls back to CPU silently if no GPU is available.
+  - `--device cpu`: Forces CPU inference regardless of available hardware.
+  - `KokoroBackend` now accepts a `device` parameter (default: `"auto"`).
+  - `KokoroBackend.active_device` property exposes the device actually used after model loading.
+- **Device Detection Module** (`infrastructure/device.py`):
+  - `detect_devices()`: Scans for available compute backends (CPU, CUDA NVIDIA GPU, OpenVINO GPU) and returns structured `DeviceInfo` objects.
+  - `resolve_device(device)`: Maps user-facing device names to resolved `DeviceInfo` with provider configurations.
+  - `get_provider_config(device)`: Returns ORT provider tuples and fallback policy for `InferenceSession` creation.
+  - `verify_session_provider(session, expected, device)`: Post-creation verification that the requested EP is actually active.
+  - Lazy imports for `onnxruntime` — missing optional packages never cause import errors.
+- **OpenVINO Execution Provider Integration**:
+  - When `--device openvino` is used, `KokoroBackend` creates an `ort.InferenceSession` with `OpenVINOExecutionProvider` and `device_type` set to the detected GPU (e.g. `"GPU"` or `"GPU.0"`).
+  - Uses `Kokoro.from_session()` to inject the pre-configured ORT session into kokoro-onnx.
+  - `enable_fallback=0` prevents ORT from silently falling back to CPU when the user explicitly requests OpenVINO.
+  - Post-creation verification via `session.get_providers()` confirms the EP is active.
+- **Hardware Detection Script** (`scripts/detect_device.py`):
+  - Standalone diagnostic tool showing ONNX Runtime version, available providers, CUDA/OpenVINO status, detected devices, and Kokoro session verification.
+  - Usage: `python scripts/detect_device.py` or `python scripts/detect_device.py --device cuda`.
+- **TTS Benchmark Script** (`scripts/benchmark_tts.py`):
+  - Compares CPU vs GPU inference using the same model and text.
+  - Reports: device, session providers, inference time, audio duration, real-time factor (RTF).
+  - Usage: `python scripts/benchmark_tts.py --all` or `python scripts/benchmark_tts.py --device cuda`.
 
-### Fixed
-- **Section Separator Noise Removal**:
-  - Fixed noise detection pattern to also filter out separators made of em-dashes (`—————`, U+2014) and en-dashes (`———`, U+2013), which some ebooks use as decorative section dividers. Previously only standard hyphens (`-`) were detected, causing TTS to attempt reading these separators.
+### Changed
+- `KokoroBackend.__init__` now accepts `device: str = "auto"` parameter.
+- `_create_engine()` in CLI now passes `device` to `KokoroBackend`.
+- `pyproject.toml`: Version bumped to `0.6.0`. Added `[openvino]` and `[cuda]` optional dependencies. Added mypy overrides for `onnxruntime`, `openvino`, and `kokoro_onnx` modules.
+- Test count expanded to 304 passing tests.
+
+### Known Limitations
+- **OpenVINO + Kokoro model compatibility**: The Kokoro v1.0 ONNX model uses ONNX sequence operators (`SplitToSequence`, `SequenceAt`, `ConcatFromSequence`) that OpenVINO cannot convert. When `--device openvino` is used, a clear error message explains this and suggests `--device cpu`. This limitation may be resolved in future versions of OpenVINO or with a re-exported Kokoro model.
 
 ---
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ebook-audiobook-engine"
-version = "0.5.0"
+version = "0.6.0"
 description = "Local audiobook-conversion engine with pluggable TTS backends"
 readme = "README.md"
 license = "MIT"
@@ -23,6 +23,12 @@ kokoro = [
     "soundfile>=0.12",
     "requests>=2.31",
 ]
+openvino = [
+    "onnxruntime-openvino>=1.24",
+]
+cuda = [
+    "onnxruntime-gpu>=1.24",
+]
 api = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
@@ -34,7 +40,7 @@ dev = [
     "mypy>=1.9",
 ]
 all = [
-    "ebook-audiobook-engine[kokoro,api,dev]",
+    "ebook-audiobook-engine[kokoro,openvino,api,dev]",
 ]
 
 [project.scripts]
@@ -64,6 +70,18 @@ python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = "onnxruntime"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "openvino"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "kokoro_onnx"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

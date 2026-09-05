@@ -6,7 +6,8 @@ from GitHub releases on first use and cached locally.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import logging
+from typing import TYPE_CHECKING, Any
 
 from audiobook_engine.domain.exceptions import TTSBackendError
 from audiobook_engine.domain.models import (
@@ -17,6 +18,8 @@ from audiobook_engine.domain.models import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # Mapping from kokoro voice prefix to language code
 _VOICE_PREFIX_TO_LANG: dict[str, str] = {
@@ -55,7 +58,20 @@ class KokoroBackend:
     """Kokoro TTS backend using kokoro-onnx for inference.
 
     Models are downloaded from GitHub releases on first use and stored
-    in the user cache directory. They are never part of the repository.
+    in the user cache directory.  They are never part of the repository.
+
+    Parameters
+    ----------
+    model_path:
+        Path to the ONNX model file.  ``None`` triggers auto-download.
+    voices_path:
+        Path to the voices binary.  ``None`` triggers auto-download.
+    device:
+        Compute device selection: ``"auto"`` (default), ``"cpu"``,
+        ``"cuda"``, or ``"openvino"``.  In ``"auto"`` mode the best
+        available device is chosen silently (CUDA > OpenVINO GPU > CPU).
+        ``"cuda"`` forces NVIDIA GPU and raises an error if unavailable.
+        ``"openvino"`` forces Intel GPU and raises an error if unavailable.
     """
 
     name: str = "kokoro"
@@ -64,10 +80,21 @@ class KokoroBackend:
         self,
         model_path: Path | None = None,
         voices_path: Path | None = None,
+        device: str = "auto",
     ) -> None:
         self._model_path = model_path
         self._voices_path = voices_path
+        self._device = device
         self._kokoro: object | None = None
+        self._active_device: str | None = None
+
+    @property
+    def active_device(self) -> str | None:
+        """The device name that was actually used after loading.
+
+        ``None`` before the first call to ``_ensure_loaded()``.
+        """
+        return self._active_device
 
     def _ensure_loaded(self) -> object:
         """Lazy-load the kokoro model on first use."""
@@ -98,15 +125,148 @@ class KokoroBackend:
                 voices_path = get_voices_path()
 
         try:
-            self._kokoro = Kokoro(
-                str(model_path), str(voices_path)
+            self._kokoro, self._active_device = self._create_kokoro(
+                Kokoro, str(model_path), str(voices_path)
             )
+        except TTSBackendError:
+            raise
         except Exception as exc:
             raise TTSBackendError(
                 f"Failed to load Kokoro model: {exc}"
             ) from exc
 
         return self._kokoro
+
+    def _create_kokoro_cpu(
+        self,
+        kokoro_cls: type[Any],
+        model_path: str,
+        voices_path: str,
+    ) -> tuple[object, str]:
+        """Create a Kokoro instance on CPU (fallback path).
+
+        Creates an explicit CPU-only ORT session so kokoro-onnx does not
+        try to auto-detect and use OpenVINO/CUDA internally.
+        """
+        import onnxruntime as ort
+
+        log.info("Loading Kokoro on CPU (fallback)")
+        so = ort.SessionOptions()
+        session = ort.InferenceSession(
+            model_path,
+            sess_options=so,
+            providers=["CPUExecutionProvider"],
+        )
+        kokoro = kokoro_cls.from_session(session, voices_path)
+        return (kokoro, "cpu")
+
+    def _create_kokoro(
+        self,
+        kokoro_cls: type[Any],
+        model_path: str,
+        voices_path: str,
+    ) -> tuple[object, str]:
+        """Create a Kokoro instance, optionally with a specific EP.
+
+        Returns ``(kokoro_instance, device_used)``.
+        """
+        from audiobook_engine.infrastructure.device import (
+            get_provider_config,
+            resolve_device,
+            verify_session_provider,
+        )
+
+        resolved = resolve_device(self._device)
+
+        # Plain CPU — use kokoro-onnx default path (no EP override)
+        if resolved.provider_name is None:
+            log.info("Loading Kokoro on CPU")
+            return (kokoro_cls(model_path, voices_path), "cpu")
+
+        # GPU / accelerated backend — create ORT session ourselves
+        providers, disable_fallback = get_provider_config(self._device)
+
+        try:
+            import onnxruntime as ort
+
+            so = ort.SessionOptions()
+            if disable_fallback:
+                # Prevent ORT from silently falling back to CPU when the
+                # user explicitly requested a specific backend.
+                session = ort.InferenceSession(
+                    model_path,
+                    sess_options=so,
+                    providers=providers,
+                    enable_fallback=0,
+                )
+            else:
+                session = ort.InferenceSession(
+                    model_path,
+                    sess_options=so,
+                    providers=providers,
+                )
+        except Exception as exc:
+            # In auto mode, the selected EP may fail (e.g. OpenVINO
+            # cannot handle Kokoro's dynamic-shape operators).  Fall
+            # back to CPU instead of crashing.
+            if not disable_fallback:
+                log.warning(
+                    "Device '%s' failed (%s), falling back to CPU",
+                    resolved.display_name,
+                    exc,
+                )
+                return self._create_kokoro_cpu(
+                    kokoro_cls, model_path, voices_path
+                )
+
+            msg = str(exc)
+            if "dynamic" in msg.lower() or "SequenceAt" in msg:
+                hint = (
+                    "The Kokoro ONNX model uses operators "
+                    "(SplitToSequence, SequenceAt) that OpenVINO "
+                    "cannot convert. This is a known model "
+                    "compatibility limitation.\n"
+                    "Use --device cpu instead."
+                )
+            else:
+                hint = ""
+            error_text = (
+                f"Failed to create ONNX Runtime session with "
+                f"{resolved.provider_name}: {exc}"
+            )
+            if hint:
+                error_text += f"\n\n{hint}"
+            raise TTSBackendError(error_text) from exc
+
+        # Verify the EP is actually active (not just registered)
+        error = verify_session_provider(
+            session,
+            resolved.provider_name,
+            resolved.gpu_device_id,
+        )
+        if error:
+            # In auto mode, EP verification failure also falls back to CPU
+            if not disable_fallback:
+                log.warning(
+                    "Device '%s' EP verification failed: %s — "
+                    "falling back to CPU",
+                    resolved.display_name,
+                    error,
+                )
+                return self._create_kokoro_cpu(
+                    kokoro_cls, model_path, voices_path
+                )
+            raise TTSBackendError(error)
+
+        log.info(
+            "Loading Kokoro on %s (EP: %s, options: %s)",
+            resolved.display_name,
+            resolved.provider_name,
+            resolved.provider_options,
+        )
+
+        kokoro = kokoro_cls.from_session(session, voices_path)
+        return (kokoro, resolved.name)
 
     def capabilities(self) -> BackendCapabilities:
         """Return available languages and voices.

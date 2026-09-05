@@ -1,6 +1,6 @@
 # ebook-audiobook-engine
 
-> **Version: v0.5.2** — Local audiobook conversion engine with configurable prosody, smart dialogue chunking, and pluggable TTS backends.
+> **Version: v0.6.0** — Local audiobook conversion engine with configurable prosody, smart dialogue chunking, GPU acceleration via NVIDIA CUDA and Intel OpenVINO, and pluggable TTS backends.
 
 Developed in [OpenCode](https://opencode.ai) through human-guided orchestration of Mimo V2.5, Gemini 3.5 Flash Lite, Gemini 3.7 Flash, Gemini 3.1 Pro, and minor assistance from auxiliary models.
 
@@ -12,11 +12,12 @@ Developed in [OpenCode](https://opencode.ai) through human-guided orchestration 
 | **TXT → M4B** | ✅ Funcional | Paragraph-aware parsing, auto fallback to WAV merger |
 | **MOBI/AZW/AZW3 → M4B** | ✅ Funcional | Kindle ebook support via KindleUnpack (DRM-free only) |
 | **Kokoro TTS Backend** | ✅ Funcional | Multilingual ONNX local inference with auto model download |
+| **GPU Acceleration** | ✅ Funcional | NVIDIA CUDA and Intel GPU via ONNX Runtime EPs, auto device detection, CPU fallback |
 | **Prosody & Pauses** | ✅ Funcional | Configurable paragraph (700ms), chapter (2500ms), and scene break (1500ms) pauses |
 | **Dialogue & Interrogatives** | ✅ Mejorado | Natural phrasing: dialog tags kept with questions, em-dash normalization, acoustic tail padding |
 | **Chunking** | ✅ Determinado | Max 500 chars, sentence-boundary aware, abbreviation & Spanish punctuation handling |
 | **Assembly (WAV/M4B)** | ✅ Validado | Bit-perfect PCM pause insertion, FFmpeg concat demuxer for large audiobooks |
-| **Tests** | 211 passing | 100% test pass rate with strict typing and linting |
+| **Tests** | 304 passing | 100% test pass rate with strict typing and linting |
 
 ---
 
@@ -78,8 +79,47 @@ Or with specific extras:
 
 ```bash
 pip install -e ".[kokoro]"      # TTS backend
+pip install -e ".[openvino]"    # Intel GPU acceleration (optional)
+pip install -e ".[cuda]"        # NVIDIA GPU acceleration (optional)
 pip install -e ".[api]"         # HTTP service
 pip install -e ".[dev]"         # Testing/linting
+```
+
+For Intel GPU acceleration:
+
+```bash
+pip install -e ".[kokoro,openvino]"
+```
+
+For NVIDIA GPU acceleration:
+
+```bash
+pip install -e ".[kokoro,cuda]"
+```
+
+### Activating the virtual environment
+
+If you created a virtual environment (or the project uses one via `uv`), activate it before running commands:
+
+```bash
+# bash / zsh
+source .venv/bin/activate
+
+# fish
+source .venv/bin/activate.fish
+
+# fish (alternative)
+. .venv/bin/activate.fish
+
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+```
+
+If you use [uv](https://docs.astral.sh/uv/), you can run commands directly without activating:
+
+```bash
+uv run audiobook-engine convert book.epub -v ef_dora -o book.m4b
+uv run pytest
 ```
 
 ---
@@ -144,6 +184,15 @@ audiobook-engine convert book.azw3 -v ef_dora -o book.m4b -l es
 
 # Convert keeping intermediate WAV files (for debugging)
 audiobook-engine convert book.epub -v ef_dora -o book.m4b --keep-intermediates
+
+# Force CPU inference
+audiobook-engine convert book.epub -v ef_dora -o book.m4b --device cpu
+
+# Force NVIDIA CUDA GPU — errors if not available
+audiobook-engine convert book.epub -v ef_dora -o book.m4b --device cuda
+
+# Force OpenVINO GPU (Intel) — errors if not available
+audiobook-engine convert book.epub -v ef_dora -o book.m4b --device openvino
 ```
 
 ### CLI Options for `convert`
@@ -154,6 +203,7 @@ audiobook-engine convert book.epub -v ef_dora -o book.m4b --keep-intermediates
 | `--language` | `-l` | `en` | Target language code (`es`, `en-us`, `en-gb`, `ja`, etc.) |
 | `--voice` | `-v` | *(Required)* | Voice identifier (e.g. `ef_dora`, `em_alex`, `af_sarah`) |
 | `--speed` | `-s` | `1.0` | Narration speed multiplier (`0.5` to `2.0`) |
+| `--device` | `-d` | `auto` | Compute device: `auto`, `cpu`, `cuda`, `openvino` |
 | `--paragraph-pause` | | `700` | Pause duration between paragraphs in milliseconds |
 | `--chapter-pause` | | `2500` | Pause duration between chapters in milliseconds |
 | `--scene-break-pause` | | `1500` | Pause duration for scene breaks in milliseconds |
@@ -161,6 +211,58 @@ audiobook-engine convert book.epub -v ef_dora -o book.m4b --keep-intermediates
 | `--work-dir` | `-w` | `work/` | Temporary directory for job artifacts and cache |
 | `--keep-intermediates` | | `False` | Keep intermediate WAV files after conversion (cleaned by default) |
 | `--verbose` | `-V` | `False` | Enable debug logging |
+
+---
+
+### GPU Acceleration (NVIDIA CUDA / Intel OpenVINO)
+
+ebook-audiobook-engine supports GPU acceleration through ONNX Runtime execution providers for both NVIDIA CUDA and Intel OpenVINO. The `--device auto` mode automatically selects the best available device (CUDA > OpenVINO > CPU).
+
+**NVIDIA CUDA:**
+
+```bash
+# Install with CUDA support
+pip install -e ".[kokoro,cuda]"
+
+# Auto-detect (prefers CUDA if available)
+audiobook-engine convert book.epub -v af_sarah -o book.m4b
+
+# Force CUDA — fails with clear error if not available
+audiobook-engine convert book.epub -v af_sarah -o book.m4b --device cuda
+```
+
+Requirements:
+- NVIDIA GPU with CUDA-capable drivers
+- `onnxruntime-gpu` package (installed via `[cuda]` extra)
+
+**Intel OpenVINO:**
+
+```bash
+# Install with OpenVINO support
+pip install -e ".[kokoro,openvino]"
+
+# Force OpenVINO — fails with clear error if not available
+audiobook-engine convert book.epub -v af_sarah -o book.m4b --device openvino
+```
+
+Requirements:
+- Intel CPU with integrated GPU (e.g. Iris Xe) or discrete Intel GPU
+- `onnxruntime-openvino` package (installed via `[openvino]` extra)
+- On Linux: Intel Compute Runtime and GPU drivers
+
+> **Note:** `onnxruntime-gpu` and `onnxruntime-openvino` are mutually exclusive distributions. Only install one `[cuda]` or `[openvino]` extra per environment.
+
+**Diagnostics:**
+
+```bash
+# Show detected hardware and providers
+python scripts/detect_device.py
+
+# Benchmark specific device
+python scripts/benchmark_tts.py --device cuda
+python scripts/benchmark_tts.py --device openvino
+python scripts/benchmark_tts.py --all
+```
 
 ---
 
@@ -175,7 +277,7 @@ from audiobook_engine.infrastructure.tts.kokoro.backend import KokoroBackend
 
 # Parse EPUB
 parser = EPUBParser()
-tts = KokoroBackend()
+tts = KokoroBackend(device="auto")  # or "cpu", "cuda", "openvino"
 engine = AudiobookEngine(parser, tts, work_dir=Path("work"))
 
 book = engine.inspect(Path("book.epub"))
@@ -221,8 +323,9 @@ src/audiobook_engine/
 │   │   ├── normalizer.py   # Dialogue dashes, quotes, whitespace cleaning
 │   │   └── chunker.py      # Sentence & dialogue-aware text chunking
 │   ├── tts/kokoro/         # Kokoro ONNX TTS backend adapter
-│   │   ├── backend.py      # Synthesis with speed & tail protection
+│   │   ├── backend.py      # Synthesis with speed, tail protection & device selection
 │   │   └── models.py       # Model cache & automated downloader
+│   ├── device.py           # Hardware detection, CUDA/OpenVINO/CPU provider resolution
 │   ├── audio/
 │   │   ├── silence.py      # WAV silence generation & pause injection
 │   │   ├── wav_merger.py   # Raw PCM WAV concatenator with silence support
@@ -231,7 +334,7 @@ src/audiobook_engine/
 │   └── persistence/
 │       └── job_store.py    # JSON job persistence for crash recovery
 └── interfaces/
-    └── cli/main.py         # Typer CLI with rich progress & prosody flags
+    └── cli/main.py         # Typer CLI with rich progress, prosody & device flags
 ```
 
 ---
@@ -240,6 +343,8 @@ src/audiobook_engine/
 
 ```
 EPUB/TXT/MOBI/AZW/AZW3 → Parse → Normalize → Chunk → TTS (Kokoro) → Silence Injection → WAV → M4B
+                                                  ↓
+                                        Device Selection (CPU/GPU)
                                                   ↓
                                             Persistence (job.json)
                                                   ↓

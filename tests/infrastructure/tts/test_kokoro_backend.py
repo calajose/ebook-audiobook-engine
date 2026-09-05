@@ -9,6 +9,7 @@ import pytest
 
 from audiobook_engine.domain.exceptions import TTSBackendError
 from audiobook_engine.domain.models import BackendCapabilities
+from audiobook_engine.infrastructure.device import DeviceInfo
 from audiobook_engine.infrastructure.tts.kokoro.backend import (
     KokoroBackend,
     _voice_to_language,
@@ -155,6 +156,327 @@ class TestKokoroBackendSynthesize:
             backend.synthesize(
                 "", "en-us", "af_sarah", Path("/tmp/o.wav")
             )
+
+
+class TestKokoroBackendDevice:
+    def test_default_device_is_auto(self) -> None:
+        backend = KokoroBackend(
+            model_path=Path("/fake/model.onnx"),
+            voices_path=Path("/fake/voices.bin"),
+        )
+        assert backend._device == "auto"
+
+    def test_device_cpu_parameter(self) -> None:
+        backend = KokoroBackend(
+            model_path=Path("/fake/model.onnx"),
+            voices_path=Path("/fake/voices.bin"),
+            device="cpu",
+        )
+        assert backend._device == "cpu"
+
+    def test_active_device_none_before_load(self) -> None:
+        backend = KokoroBackend(
+            model_path=Path("/fake/model.onnx"),
+            voices_path=Path("/fake/voices.bin"),
+        )
+        assert backend.active_device is None
+
+    def test_active_device_set_after_load(self) -> None:
+        backend = KokoroBackend(
+            model_path=Path("/fake/model.onnx"),
+            voices_path=Path("/fake/voices.bin"),
+            device="cpu",
+        )
+        mock_kokoro = MagicMock()
+        mock_kokoro.get_voices.return_value = ["af_sarah"]
+        backend._kokoro = mock_kokoro
+        backend._active_device = "cpu"
+        assert backend.active_device == "cpu"
+
+    def test_create_kokoro_cpu_uses_kokoro_cls_directly(self) -> None:
+        mock_cls = MagicMock()
+        mock_cls.return_value = MagicMock()
+        backend = KokoroBackend(
+            model_path=Path("/fake/model.onnx"),
+            voices_path=Path("/fake/voices.bin"),
+            device="cpu",
+        )
+        result, device_used = backend._create_kokoro(
+            mock_cls, "/fake/model.onnx", "/fake/voices.bin"
+        )
+        mock_cls.assert_called_once_with(
+            "/fake/model.onnx", "/fake/voices.bin"
+        )
+        assert device_used == "cpu"
+
+    def test_create_kokoro_openvino_creates_ort_session(self) -> None:
+        mock_cls = MagicMock()
+        mock_session = MagicMock()
+        mock_session.get_providers.return_value = [
+            "OpenVINOExecutionProvider"
+        ]
+        mock_session.get_provider_options.return_value = [
+            {"device_type": "GPU"}
+        ]
+        mock_cls.from_session.return_value = MagicMock()
+
+        backend = KokoroBackend(
+            model_path=Path("/fake/model.onnx"),
+            voices_path=Path("/fake/voices.bin"),
+            device="openvino",
+        )
+
+        mock_dev = DeviceInfo(
+            name="openvino_gpu",
+            display_name="GPU",
+            available=True,
+            provider_name="OpenVINOExecutionProvider",
+            provider_options={"device_type": "GPU"},
+            gpu_device_id="GPU",
+        )
+
+        with patch(
+            "audiobook_engine.infrastructure.device.resolve_device"
+        ) as mock_resolve, patch(
+            "audiobook_engine.infrastructure.device.get_provider_config"
+        ) as mock_config, patch(
+            "onnxruntime.InferenceSession", return_value=mock_session
+        ), patch(
+            "audiobook_engine.infrastructure.device.verify_session_provider",
+            return_value=None,
+        ):
+            mock_resolve.return_value = mock_dev
+            mock_config.return_value = (
+                [("OpenVINOExecutionProvider", {"device_type": "GPU"})],
+                True,
+            )
+
+            result, device_used = backend._create_kokoro(
+                mock_cls, "/fake/model.onnx", "/fake/voices.bin"
+            )
+
+        mock_cls.from_session.assert_called_once()
+        assert device_used == "openvino_gpu"
+
+    def test_create_kokoro_openvino_ep_verification_failure(self) -> None:
+        mock_cls = MagicMock()
+        mock_session = MagicMock()
+        mock_session.get_providers.return_value = [
+            "CPUExecutionProvider"
+        ]
+
+        backend = KokoroBackend(
+            model_path=Path("/fake/model.onnx"),
+            voices_path=Path("/fake/voices.bin"),
+            device="openvino",
+        )
+
+        mock_dev = DeviceInfo(
+            name="openvino_gpu",
+            display_name="GPU",
+            available=True,
+            provider_name="OpenVINOExecutionProvider",
+            provider_options={"device_type": "GPU"},
+            gpu_device_id="GPU",
+        )
+
+        with patch(
+            "audiobook_engine.infrastructure.device.resolve_device"
+        ) as mock_resolve, patch(
+            "audiobook_engine.infrastructure.device.get_provider_config"
+        ) as mock_config, patch(
+            "onnxruntime.InferenceSession", return_value=mock_session
+        ), patch(
+            "audiobook_engine.infrastructure.device.verify_session_provider",
+            return_value="EP not active",
+        ):
+            mock_resolve.return_value = mock_dev
+            mock_config.return_value = (
+                [("OpenVINOExecutionProvider", {"device_type": "GPU"})],
+                True,
+            )
+
+            with pytest.raises(TTSBackendError, match="EP not active"):
+                backend._create_kokoro(
+                    mock_cls, "/fake/model.onnx", "/fake/voices.bin"
+                )
+
+    def test_create_kokoro_auto_fallback_on_openvino_failure(self) -> None:
+        mock_cls = MagicMock()
+        mock_session = MagicMock()
+        mock_session.get_providers.return_value = ["CPUExecutionProvider"]
+        mock_cls.from_session.return_value = MagicMock()
+
+        backend = KokoroBackend(
+            model_path=Path("/fake/model.onnx"),
+            voices_path=Path("/fake/voices.bin"),
+            device="auto",
+        )
+
+        mock_dev = DeviceInfo(
+            name="openvino_gpu",
+            display_name="OpenVINO GPU",
+            available=True,
+            provider_name="OpenVINOExecutionProvider",
+            provider_options={"device_type": "GPU"},
+        )
+
+        call_count = 0
+
+        def _mock_session(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First call (OpenVINO) fails
+                raise Exception("OpenVINO dynamic shape error")
+            # Second call (CPU fallback) succeeds
+            return mock_session
+
+        with patch(
+            "audiobook_engine.infrastructure.device.resolve_device"
+        ) as mock_resolve, patch(
+            "audiobook_engine.infrastructure.device.get_provider_config"
+        ) as mock_config, patch(
+            "onnxruntime.InferenceSession",
+            side_effect=_mock_session,
+        ):
+            mock_resolve.return_value = mock_dev
+            mock_config.return_value = (
+                [("OpenVINOExecutionProvider", {"device_type": "GPU"})],
+                False,  # auto mode — allow fallback
+            )
+
+            result, device_used = backend._create_kokoro(
+                mock_cls, "/fake/model.onnx", "/fake/voices.bin"
+            )
+
+        # Should fall back to CPU
+        assert device_used == "cpu"
+        mock_cls.from_session.assert_called_once()
+
+    def test_create_kokoro_explicit_no_fallback_on_failure(self) -> None:
+        mock_cls = MagicMock()
+
+        backend = KokoroBackend(
+            model_path=Path("/fake/model.onnx"),
+            voices_path=Path("/fake/voices.bin"),
+            device="openvino",
+        )
+
+        mock_dev = DeviceInfo(
+            name="openvino_gpu",
+            display_name="OpenVINO GPU",
+            available=True,
+            provider_name="OpenVINOExecutionProvider",
+            provider_options={"device_type": "GPU"},
+        )
+
+        with patch(
+            "audiobook_engine.infrastructure.device.resolve_device"
+        ) as mock_resolve, patch(
+            "audiobook_engine.infrastructure.device.get_provider_config"
+        ) as mock_config, patch(
+            "onnxruntime.InferenceSession",
+            side_effect=Exception("OpenVINO dynamic shape error"),
+        ):
+            mock_resolve.return_value = mock_dev
+            mock_config.return_value = (
+                [("OpenVINOExecutionProvider", {"device_type": "GPU"})],
+                True,  # explicit mode — no fallback
+            )
+
+            with pytest.raises(TTSBackendError, match="Failed to create"):
+                backend._create_kokoro(
+                    mock_cls, "/fake/model.onnx", "/fake/voices.bin"
+                )
+
+    def test_create_kokoro_cuda_creates_ort_session(self) -> None:
+        mock_cls = MagicMock()
+        mock_session = MagicMock()
+        mock_session.get_providers.return_value = [
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+        mock_cls.from_session.return_value = MagicMock()
+
+        backend = KokoroBackend(
+            model_path=Path("/fake/model.onnx"),
+            voices_path=Path("/fake/voices.bin"),
+            device="cuda",
+        )
+
+        mock_dev = DeviceInfo(
+            name="cuda",
+            display_name="NVIDIA CUDA GPU",
+            available=True,
+            provider_name="CUDAExecutionProvider",
+            provider_options={},
+        )
+
+        with patch(
+            "audiobook_engine.infrastructure.device.resolve_device"
+        ) as mock_resolve, patch(
+            "audiobook_engine.infrastructure.device.get_provider_config"
+        ) as mock_config, patch(
+            "onnxruntime.InferenceSession", return_value=mock_session
+        ), patch(
+            "audiobook_engine.infrastructure.device.verify_session_provider",
+            return_value=None,
+        ):
+            mock_resolve.return_value = mock_dev
+            mock_config.return_value = (
+                ["CUDAExecutionProvider", "CPUExecutionProvider"],
+                True,
+            )
+
+            result, device_used = backend._create_kokoro(
+                mock_cls, "/fake/model.onnx", "/fake/voices.bin"
+            )
+
+        mock_cls.from_session.assert_called_once()
+        assert device_used == "cuda"
+
+    def test_create_kokoro_cuda_ep_verification_failure(self) -> None:
+        mock_cls = MagicMock()
+        mock_session = MagicMock()
+        mock_session.get_providers.return_value = [
+            "CPUExecutionProvider"
+        ]
+
+        backend = KokoroBackend(
+            model_path=Path("/fake/model.onnx"),
+            voices_path=Path("/fake/voices.bin"),
+            device="cuda",
+        )
+
+        mock_dev = DeviceInfo(
+            name="cuda",
+            display_name="NVIDIA CUDA GPU",
+            available=True,
+            provider_name="CUDAExecutionProvider",
+            provider_options={},
+        )
+
+        with patch(
+            "audiobook_engine.infrastructure.device.resolve_device"
+        ) as mock_resolve, patch(
+            "audiobook_engine.infrastructure.device.get_provider_config"
+        ) as mock_config, patch(
+            "onnxruntime.InferenceSession", return_value=mock_session
+        ), patch(
+            "audiobook_engine.infrastructure.device.verify_session_provider",
+            return_value="EP not active",
+        ):
+            mock_resolve.return_value = mock_dev
+            mock_config.return_value = (
+                ["CUDAExecutionProvider", "CPUExecutionProvider"],
+                True,
+            )
+
+            with pytest.raises(TTSBackendError, match="EP not active"):
+                backend._create_kokoro(
+                    mock_cls, "/fake/model.onnx", "/fake/voices.bin"
+                )
 
 
 class TestModelDownload:

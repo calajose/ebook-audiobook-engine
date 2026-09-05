@@ -82,6 +82,7 @@ def _get_parser(source: Path) -> EbookParser:
 def _create_engine(
     work_dir: str | None,
     source: Path | None = None,
+    device: str = "auto",
 ) -> AudiobookEngine:
     """Create an AudiobookEngine with appropriate parser and TTS backend."""
     from audiobook_engine.infrastructure.tts.kokoro.backend import (
@@ -89,7 +90,7 @@ def _create_engine(
     )
 
     parser = _get_parser(source) if source else EPUBParser()
-    tts = KokoroBackend()
+    tts = KokoroBackend(device=device)
     work = Path(work_dir) if work_dir else Path("work")
     return AudiobookEngine(parser, tts, work_dir=work)
 
@@ -192,6 +193,12 @@ def convert(
         "--keep-intermediates",
         help="Keep intermediate WAV files after conversion.",
     ),
+    device: str = typer.Option(
+        "auto",
+        "--device",
+        "-d",
+        help="Compute device: auto, cpu, cuda, openvino.",
+    ),
     verbose: bool = typer.Option(
         False, "--verbose", "-V", help="Enable verbose logging."
     ),
@@ -205,10 +212,16 @@ def convert(
         raise typer.Exit(1)
 
     try:
-        engine = _create_engine(work_dir, source)
-    except EbookError as exc:
+        engine = _create_engine(work_dir, source, device=device)
+    except (EbookError, TTSBackendError) as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from None
+
+    # Display selected device
+    if hasattr(engine, "_tts") and hasattr(engine._tts, "active_device"):
+        active = engine._tts.active_device
+        if active and active != "cpu":
+            console.print(f"[bold]Device:[/bold] {active}")
 
     with console.status("[bold green]Inspecting ebook..."):
         book_data = engine.inspect(source)
@@ -335,12 +348,18 @@ def convert(
 
 @app.command()
 def capabilities(
+    device: str = typer.Option(
+        "auto",
+        "--device",
+        "-d",
+        help="Compute device: auto, cpu, cuda, openvino.",
+    ),
     work_dir: str | None = typer.Option(
         None, "--work-dir", "-w", help="Working directory."
     ),
 ) -> None:
     """Display supported languages and voice counts."""
-    engine = _create_engine(work_dir)
+    engine = _create_engine(work_dir, device=device)
     try:
         caps = engine.capabilities()
         langs = ", ".join(lang.code for lang in caps.languages)
@@ -606,12 +625,18 @@ def list_voices(
     language: str | None = typer.Option(
         None, "--language", "-l", help="Filter by language code."
     ),
+    device: str = typer.Option(
+        "auto",
+        "--device",
+        "-d",
+        help="Compute device: auto, cpu, cuda, openvino.",
+    ),
     work_dir: str | None = typer.Option(
         None, "--work-dir", "-w", help="Working directory."
     ),
 ) -> None:
     """List available voices and languages."""
-    engine = _create_engine(work_dir)
+    engine = _create_engine(work_dir, device=device)
 
     try:
         caps = engine.capabilities()

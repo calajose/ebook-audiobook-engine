@@ -22,6 +22,8 @@ FORBIDDEN_PREFIXES = (
     "starlette",
     "httpx",
     "requests",
+    "onnxruntime",
+    "openvino",
 )
 
 
