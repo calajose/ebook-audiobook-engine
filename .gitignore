@@ -16,3 +16,7 @@ out.*
 .idea/
 .vscode/
 kokoro_openvino.*
+# Especificaciones (repo privado propio; nunca en el publico)
+specs
+.specify
+specs-privado/
