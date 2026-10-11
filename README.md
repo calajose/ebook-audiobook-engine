@@ -376,4 +376,8 @@ ruff format .
 
 ## License
 
-MIT
+The code in this repository is licensed under the MIT License (see `LICENSE`).
+
+The design specifications are maintained in a private repository; they are not
+distributed with this project and are excluded from the scope of the MIT
+license. All rights reserved on that content.

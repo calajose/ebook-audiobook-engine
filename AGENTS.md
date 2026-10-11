@@ -1,132 +1,121 @@
 # AGENTS.md — Developer & AI Agent Guidelines
 
-Welcome to `ebook-audiobook-engine`. This document serves as the single source of truth for AI agents (and human contributors) developing, extending, or maintaining this codebase.
-
----
+Instructions for future OpenCode sessions (and human contributors) working in
+`ebook-audiobook-engine`.
 
 ## ⚠️ CRITICAL RULES
 
-1. **NEVER commit or push without explicit user request.** Only run `git commit` and `git push` when the user explicitly asks for it (e.g. "commit", "push", "commit y push"). Do NOT proactively commit changes, even if they seem complete.
-2. **Domain isolation:** `domain/` must NEVER import from `infrastructure/`, `application/`, `interfaces/`, or third-party libraries.
+1. **NEVER commit or push without explicit user request.**
+2. **Domain isolation:** `domain/` must never import `infrastructure/`, `application/`,
+   `interfaces/`, or third-party libraries.
+   - The third-party part is auto-checked by `tests/domain/test_no_forbidden_imports.py`
+     (textual scan for `kokoro`, `ffmpeg`, `fastapi`, `uvicorn`, `requests`, `onnxruntime`,
+     `openvino`, `httpx`, `starlette`, `calibre`).
+   - Internal layering (`domain` → `audiobook_engine.infrastructure`) is **not** checked by
+     any test — enforce it manually.
 
----
+## Verification (run from repo root)
 
-## 1. Project Overview & Architectural Vision
+No CI, Makefile, or lockfile exists — the local venv is the source of truth.
+The package is installed editable in `.venv/`:
 
-`ebook-audiobook-engine` is a local, offline-first ebook-to-audiobook conversion pipeline built with Clean Architecture / Hexagonal Architecture principles.
+```bash
+./.venv/bin/pytest                 # full suite: 304 tests, ~2s, fully mocked
+./.venv/bin/ruff check src tests   # scope matters — see below
+./.venv/bin/mypy src tests
+./.venv/bin/audiobook-engine --help  # CLI console script
+```
 
-### Key Goals:
-- **Zero Cloud Lock-in**: All synthesis runs locally (default engine: Kokoro TTS via ONNX runtime).
-- **Audiobook Quality Prosody**: Natural pauses between paragraphs, scene breaks, and chapters, with speech rate control and dialogue tag preservation.
-- **Resumable & Fault Tolerant**: Long conversions persist state to disk (`job.json`) and resume seamlessly without re-synthesizing completed segments.
-- **Multi-Interface**: CLI, direct Python API, and upcoming local HTTP service (FastAPI).
+- Single test: `./.venv/bin/pytest tests/domain/test_job.py::test_some_name`
+- Tests need **no** network, FFmpeg, GPU, or Kokoro models (both are mocked).
+- **Don't run `ruff check .`**: it also lints `scripts/experiments/` (scratch scripts) and
+  `.specify/` (spec-kit tooling), which are not lint-clean.
+- **Don't run `ruff format .` repo-wide**: ~30 of 65 files under `src`/`tests` are
+  unformatted — it would create a huge unrelated diff. Format only files you touch.
+- Known pre-existing baseline at v0.6.0 (not caused by your change): 1 ruff E501 in
+  `mobi_parser.py`, 2 mypy errors in `job_store.py` and `test_kokoro_backend.py`.
 
----
-
-## 2. Architecture & Layer Separation
-
-Strict layering is enforced across the codebase. Never violate the dependency inversion rule.
+## Architecture
 
 ```
 src/audiobook_engine/
-├── domain/                  # CORE: Pure Python dataclasses & protocols. ZERO external dependencies.
-│   ├── models.py            # Book, Chapter, TextSegment, Voice, ProsodyConfig
-│   ├── job.py               # AudiobookJob state machine & transition rules
-│   ├── protocols.py         # EbookParser, TTSBackend contracts
-│   └── exceptions.py        # Domain exception hierarchy (AudiobookEngineError base)
-│
-├── application/             # APPLICATION SERVICES: Orchestration layer.
-│   └── engine.py            # AudiobookEngine (coordinates parsers, TTS, chunker, assembler)
-│
-├── infrastructure/          # ADAPTERS & IMPLEMENTATIONS: External libraries allowed.
-│   ├── ebook/
-│   │   ├── epub_parser.py   # ebooklib wrapper -> Book model
-│   │   ├── txt_parser.py    # Plain text / paragraph parser -> Book model
-│   │   ├── normalizer.py    # Noise removal & dialogue normalization
-│   │   └── chunker.py       # Sentence & dialogue-aware deterministic text chunking
-│   ├── tts/kokoro/
-│   │   ├── backend.py       # kokoro-onnx TTS backend with speed & acoustic protection
-│   │   └── models.py        # Model downloading & user cache management
-│   ├── audio/
-│   │   ├── silence.py       # PCM silence generation & pause injection
-│   │   ├── wav_merger.py    # Bit-perfect WAV concatenation with pause support
-│   │   ├── ffmpeg.py        # Safe subprocess wrapper for FFmpeg
-│   │   └── m4b_assembler.py # M4B assembly with metadata, chapters, cover art
-│   └── persistence/
-│       └── job_store.py     # JSON serialization & crash recovery for jobs
-│
-└── interfaces/              # CLIENT ENTRY POINTS:
-    ├── cli/main.py          # Typer + Rich CLI application
-    └── api/                 # FastAPI HTTP service (Phase 9 / in development)
+├── domain/              # Pure Python: models, JobState machine, protocols, exceptions
+├── application/engine.py     # AudiobookEngine: analyze → synthesize → assemble
+├── infrastructure/
+│   ├── ebook/          # epub/mobi/txt parsers, normalizer.py, chunker.py
+│   ├── tts/kokoro/     # backend.py (synthesis), models.py (auto-downloader)
+│   ├── device.py       # CUDA / OpenVINO / CPU provider resolution
+│   ├── audio/          # silence, wav_merger, ffmpeg, m4b_assembler
+│   ├── metadata/       # (empty placeholder)
+│   └── persistence/job_store.py  # job.json serialization
+└── interfaces/
+    ├── cli/main.py     # Typer CLI (console script: audiobook-engine)
+    └── api/            # empty placeholder — HTTP service not started (plan Phase 10)
 ```
 
-### Critical Rules:
-1. **Domain Isolation**: `domain/` must NEVER import from `infrastructure/`, `application/`, `interfaces/`, or third-party libraries (e.g. `kokoro`, `ffmpeg`, `fastapi`, `requests`, `ebooklib`). This is automatically enforced by `test_no_forbidden_imports.py`.
-2. **Pluggable Backends**: All TTS engines implement the `TTSBackend` protocol (`capabilities()` and `synthesize()`).
-3. **Pluggable Parsers**: All ebook parsers implement the `EbookParser` protocol (`inspect() -> Book`).
+- Entrypoints: CLI `audiobook_engine.interfaces.cli.main:app`; Python API `AudiobookEngine`.
+- One shared pipeline for all interfaces — never fork per-interface logic.
+- Pipeline: parse → `normalize()` → `chunk_text()` → TTS → merge chunks → append pause → assemble.
 
----
+## Prosody & audio — verified behavior
 
-## 3. Audio & Prosody Subsystem
+- **Only two pauses are actually applied** in `engine.py::_synthesize`: paragraph pause
+  (default 700ms) after every segment, chapter pause (2500ms) on the chapter's last segment.
+- **Gotcha:** `scene_break_pause_ms` (1500) and `chapter_title_pause_ms` (1200) exist as
+  CLI/job fields and persist to `job.json`, but **no code consumes them yet**. Separator
+  lines (`***`, `---`, `• • •`) are *removed as noise* by `remove_noise()` inside
+  `normalize()` before synthesis. Don't claim they work; wire them up if asked to.
+- Silence is exact PCM zero frames appended to the segment WAV (`append_silence_to_wav`),
+  so `m4b_assembler.py` chapter marks (measured from WAV headers) match FFmpeg output exactly.
+- Kokoro backend: speed clamped to `0.5–2.0`; ~80ms zero tail pad after synthesis to protect
+  rising intonation on short questions. `normalize_dialogue()` converts `- `/`– ` to em-dash
+  and guillemets/curly quotes to straight quotes before phonemization.
+- Chunker: `DEFAULT_MAX_CHARS = 500`, sentence-boundary aware; lowercase dialogue tags
+  (`—preguntó ella`) stay attached to the preceding quote.
 
-### Pauses & Silence Injection:
-- Pauses are not arbitrary sleeps; they are exact PCM zero-byte frames matching the audio format (sample rate, channels, sample width).
-- **Paragraph pause** (default: `700ms`): Injected at the end of each paragraph segment WAV.
-- **Chapter pause** (default: `2500ms`): Injected at the final segment of each chapter.
-- **Scene break pause** (default: `1500ms`): Injected for section divider lines (`***`, `---`).
-- **Chapter Markers**: `m4b_assembler.py` calculates durations by reading the generated WAV headers; because silence is appended directly to segment WAVs, FFmpeg timestamps match the audio down to the exact millisecond.
+## Job state machine & persistence
 
-### Text Normalization & Dialogue Phrasing:
-- In `normalizer.py`:
-  - Spanish dialogue dashes (`- `, `– `) are converted to em-dash (`— `) so Kokoro’s phonemizer processes the dialogue onset accurately.
-  - Guillemets (`« »`) and curly quotes (`“ ”`) are normalized to standard quotes.
-  - Spacing after inverted punctuation (`¿ `, `¡ `) is cleaned.
-- In `chunker.py`:
-  - `split_sentences` inspects trailing tokens: if a question or quote is followed by a lowercase dialogue tag (e.g. `—preguntó`, `dijo él`), it does NOT split the tag away from the quote.
-  - Sentences are grouped into chunks up to `max_chars` (default `500`).
+- States: `CREATED → ANALYZING → READY → SYNTHESIZING → ASSEMBLING → COMPLETED`;
+  plus `FAILED` / `CANCELLED`. Transition table lives in `domain/job.py`.
+- Resume-eligible: `SYNTHESIZING`, `ASSEMBLING` only (`_RESUMABLE_STATES`).
+- Synthesis is idempotent: WAV paths are deterministic
+  (`ch{chapter:04d}_seg{segment:06d}_chunk{i}.wav`); an existing file is skipped.
+- Jobs live in `work/<job-id>/` (default `work/`, gitignored).
 
-### Kokoro TTS Synthesis & Tail Padding:
-- In `kokoro/backend.py`:
-  - Audio trimming in Kokoro can abruptly cut off the rising pitch of short questions (e.g. *«¿Por qué?»*).
-  - Subtle acoustic padding (`~80ms`) is appended to synthesized arrays to guarantee smooth acoustic decay before WAV concatenation.
-  - Supports speech speed multipliers (`0.5x` to `2.0x`).
+## Runtime quirks
 
----
+- First real synthesis downloads ~354 MB of Kokoro ONNX models to
+  `~/.cache/ebook-audiobook-engine/kokoro/` (tests never do this).
+- `[cuda]` and `[openvino]` extras are mutually exclusive — install only one per env.
+- FFmpeg is optional: required only for M4B output (WAV fallback otherwise).
 
-## 4. Job State Machine & Persistence
+## Docs & other instruction sources
 
-```
-[CREATED] ──► [ANALYZING] ──► [READY] ──► [SYNTHESIZING] ──► [ASSEMBLING] ──► [COMPLETED]
-    │              │             │               │                 │
-    ▼              ▼             ▼               ▼                 ▼
-[CANCELLED]   [CANCELLED]   [CANCELLED]     [CANCELLED]         [FAILED]
-                   │             │               │
-                   ▼             ▼               ▼
-                [FAILED]      [FAILED]        [FAILED]
-```
+- `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md` (phase status), `CHANGELOG.md`.
+- Update `CHANGELOG.md` and `README.md` when user-facing features or CLI flags change.
+- Spec-kit workflow: `.specify/` + `.opencode/commands/speckit.*.md` — follow those files
+  if the user invokes a speckit command.
 
-- States eligible for resume: `SYNTHESIZING`, `ASSEMBLING`.
-- Synthesis is idempotent: segment WAV paths are deterministic (`chXXXX_segYYYYYY_chunkZ.wav`). If a WAV file exists on disk, `_synthesize` skips re-generation.
+## Constitution (current phase: document & protect, NOT improve)
 
----
+`.specify/memory/constitution.md` (v1.0.0, ratified 2026-10-11) governs the current phase.
+Non-negotiable principles:
 
-## 5. Development & Verification Workflow
+- Current observable behavior is sacred — no behavior change without explicit written
+  business decision, even if it looks like a bug.
+- Every claim about system behavior needs evidence (file+lines, real data, or named business
+  testimony); unverified claims are marked `SUPOSICIÓN` and turned into questions.
+- Findings are recorded in the anomaly register (classification: severity/area/type), never
+  fixed in this phase — fixes belong to the next module.
+- Zero new dependencies, zero refactors (no moves/renames/cleanup, even behavior-preserving).
+- All documentation in English.
 
-Before finalizing any changes, always run the full verification loop:
+## Specs regime
 
-```bash
-# 1. Run test suite (must pass 100%)
-./.venv/bin/pytest
-
-# 2. Linting & import order
-./.venv/bin/ruff check .
-
-# 3. Type checking (strict mode)
-./.venv/bin/mypy src tests
-```
-
-### Adding New Features:
-1. If adding a domain concept or configuration field, update `domain/models.py`, `domain/job.py`, and `infrastructure/persistence/job_store.py` (ensure backward-compatible JSON serialization).
-2. If adding or modifying TTS backend methods, update `domain/protocols.py` first.
-3. Write unit tests for all domain and infrastructure logic in `tests/`.
-4. Update `CHANGELOG.md` and `README.md` when user-facing features or CLI flags change.
+- Specifications (`specs/`) and the constitution (`.specify/memory/constitution.md`) live in
+  a private repo of their own — NOT in this public repo.
+- That repo is cloned separately at `specs-privado/`; here, `specs/` and `.specify/` are
+  symlinks into it. All three paths are gitignored.
+- To work with them: `cd specs-privado` and commit/push there; to sync, `git pull` there.
+- The remote URL exists only in the local git config of `specs-privado` — never document it
+  here.
