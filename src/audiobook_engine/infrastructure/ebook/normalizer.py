@@ -7,6 +7,28 @@ from __future__ import annotations
 
 import re
 
+# Prosody anchors preserved through normalization and chunking.
+# They are internal sentinels (never narrated): the synthesis layer
+# turns them into silence at the configured scene/title pauses.
+SCENE_BREAK_MARKER: str = "\x00SCENE_BREAK\x00"
+CHAPTER_TITLE_MARKER: str = "\x00CHAPTER_TITLE\x00"
+PROSODY_MARKERS: frozenset[str] = frozenset({SCENE_BREAK_MARKER, CHAPTER_TITLE_MARKER})
+
+# Section separator lines: "***", "---", "• • •" (become scene pauses).
+_SCENE_SEPARATOR_RE = re.compile(r"^[\s*•\-\u2013\u2014]{3,}$")
+
+# Standalone "Chapter N" / "Capítulo N" lines (become title pauses).
+_CHAPTER_TITLE_RE = re.compile(
+    r"^(Chapter|Capítulo|Cap\.?)\s+\d+$",
+    re.IGNORECASE,
+)
+
+
+def is_prosody_marker(text: str) -> bool:
+    """Return True if the text is a prosody anchor sentinel."""
+    return text.strip() in PROSODY_MARKERS
+
+
 # Patterns for common navigation noise in ebooks
 _NOISE_PATTERNS: list[re.Pattern[str]] = [
     # Page numbers: "Page 12", "p. 42", "— 123 —"
@@ -20,16 +42,9 @@ _NOISE_PATTERNS: list[re.Pattern[str]] = [
         r"^(Contents|Table of Contents|Índice|Índice de contenidos)$",
         re.IGNORECASE,
     ),
-    # Standalone "Chapter N" / "Capítulo N" without further text
-    re.compile(
-        r"^(Chapter|Capítulo|Cap\.?)\s+\d+$",
-        re.IGNORECASE,
-    ),
     # Copyright / publisher boilerplate lines
     re.compile(r"^Copyright\s+©", re.IGNORECASE),
     re.compile(r"^All rights reserved\.?$", re.IGNORECASE),
-    # Separator lines: "***", "---", "• • •"
-    re.compile(r"^[\s*•\-\u2013\u2014]{3,}$"),
 ]
 
 
@@ -50,13 +65,24 @@ def normalize_whitespace(text: str) -> str:
 
 
 def remove_noise(text: str) -> str:
-    """Remove common navigation and boilerplate noise lines."""
+    """Remove common navigation and boilerplate noise lines.
+
+    Section separators and standalone chapter-title lines are not
+    dropped: they are replaced by prosody anchors so the synthesis
+    layer can apply the promised scene/title pauses.
+    """
     lines = text.splitlines()
     cleaned: list[str] = []
     for line in lines:
         stripped = line.strip()
         if not stripped:
             cleaned.append("")
+            continue
+        if _SCENE_SEPARATOR_RE.match(stripped):
+            cleaned.append(SCENE_BREAK_MARKER)
+            continue
+        if _CHAPTER_TITLE_RE.match(stripped):
+            cleaned.append(CHAPTER_TITLE_MARKER)
             continue
         if any(p.match(stripped) for p in _NOISE_PATTERNS):
             continue

@@ -12,18 +12,31 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from audiobook_engine.domain.exceptions import JobError
-from audiobook_engine.domain.job import AudiobookJob, JobState
+from audiobook_engine.domain.exceptions import AudioAssemblyError, JobError
+from audiobook_engine.domain.job import (
+    AudiobookJob,
+    InvalidStateTransition,
+    JobState,
+)
 from audiobook_engine.infrastructure.audio import ffmpeg
 from audiobook_engine.infrastructure.audio.m4b_assembler import (
     _extract_chapter_index_from_dir,
     _extract_segment_index_from_file,
     assemble_m4b,
 )
-from audiobook_engine.infrastructure.audio.silence import append_silence_to_wav
+from audiobook_engine.infrastructure.audio.silence import (
+    append_silence_to_wav,
+    create_silence_matching,
+    generate_silence_wav,
+)
 from audiobook_engine.infrastructure.audio.wav_merger import merge_wav_files
 from audiobook_engine.infrastructure.ebook.chunker import chunk_text
-from audiobook_engine.infrastructure.ebook.normalizer import normalize
+from audiobook_engine.infrastructure.ebook.normalizer import (
+    CHAPTER_TITLE_MARKER,
+    SCENE_BREAK_MARKER,
+    is_prosody_marker,
+    normalize,
+)
 from audiobook_engine.infrastructure.persistence.job_store import (
     load_job,
     save_job,
@@ -57,6 +70,18 @@ class BookAnalysis:
     book: Book
     chapter_analyses: tuple[ChapterAnalysis, ...]
     warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _SynthEvent:
+    """One unit of synthesis work inside a segment.
+
+    Exactly one of `text` (narrable chunk) or `pause_ms` (silence at a
+    prosody anchor) is meaningful.
+    """
+
+    text: str | None = None
+    pause_ms: int = 0
 
 
 class AudiobookEngine:
@@ -113,9 +138,16 @@ class AudiobookEngine:
 
             for seg in ch.segments:
                 cleaned = normalize(seg.text)
-                chunks = chunk_text(cleaned, max_chars=max_chars)
-                total_chars += len(cleaned)
-                total_words += len(cleaned.split())
+                plain = "\n".join(
+                    line for line in cleaned.splitlines() if not is_prosody_marker(line)
+                )
+                chunks = [
+                    chunk
+                    for chunk in chunk_text(cleaned, max_chars=max_chars)
+                    if not is_prosody_marker(chunk)
+                ]
+                total_chars += len(plain)
+                total_words += len(plain.split())
                 total_chunks += len(chunks)
                 if preview_index is not None and ch.index == preview_index:
                     text_chunks.extend(chunks)
@@ -170,10 +202,13 @@ class AudiobookEngine:
         chapter_pause_ms: int = 2500,
         scene_break_pause_ms: int = 1500,
         chapter_title_pause_ms: int = 1200,
+        max_chars: int = 500,
         chapter_indices: list[int] | None = None,
         keep_intermediates: bool = False,
     ) -> AudiobookJob:
         """Create a new conversion job from an ebook file."""
+        if max_chars <= 0:
+            raise JobError(f"max_chars must be a positive integer, got {max_chars}")
         book = self.inspect(source_path)
         raw_backend = getattr(self._tts, "name", "kokoro")
         backend_name = raw_backend if isinstance(raw_backend, str) else "kokoro"
@@ -188,6 +223,7 @@ class AudiobookEngine:
             chapter_pause_ms=chapter_pause_ms,
             scene_break_pause_ms=scene_break_pause_ms,
             chapter_title_pause_ms=chapter_title_pause_ms,
+            max_chars=max_chars,
             chapter_indices=chapter_indices,
             output_path=output_path,
             keep_intermediates=keep_intermediates,
@@ -214,9 +250,7 @@ class AudiobookEngine:
             JobState.CANCELLED,
         }
         if job.state in terminal:
-            raise JobError(
-                f"Cannot cancel job in state {job.state.value}"
-            )
+            raise JobError(f"Cannot cancel job in state {job.state.value}")
         job.transition(JobState.CANCELLED)
         self._persist(job)
         return job
@@ -227,12 +261,25 @@ class AudiobookEngine:
         Pipeline:
         CREATED -> ANALYZING -> READY -> SYNTHESIZING -> ASSEMBLING -> COMPLETED
 
-        Supports resume: if the job is already in SYNTHESIZING or
-        ASSEMBLING state, earlier phases are skipped. The synthesis
-        phase is idempotent — completed segments are not re-generated.
+        Supports resume: if the job is already in a resumable state,
+        earlier phases are skipped. The synthesis phase is idempotent —
+        completed segments are not re-generated.
+
+        A non-recoverable error transitions the job to FAILED with a
+        persisted error_message and is re-raised as a JobError (A-29).
         """
         job = self.get_job(job_id)
-        book = self._books[job_id]
+        try:
+            return self._run_pipeline(job)
+        except JobError:
+            raise
+        except Exception as exc:
+            self._fail_job(job, exc)
+            raise JobError(f"Conversion failed: {exc}") from exc
+
+    def _run_pipeline(self, job: AudiobookJob) -> AudiobookJob:
+        """Run the pipeline phases for a job (see `run`)."""
+        book = self._books[job.id]
 
         # Phase 1: Analyze (skip if resuming)
         if job.state == JobState.CREATED:
@@ -242,12 +289,19 @@ class AudiobookEngine:
             chapters_to_process = book.chapters
             if job.chapter_indices is not None:
                 chapters_to_process = tuple(
-                    ch for ch in book.chapters
-                    if ch.index in job.chapter_indices
+                    ch for ch in book.chapters if ch.index in job.chapter_indices
                 )
 
             job.total_segments = sum(
-                len(chunk_text(normalize(seg.text)))
+                len(
+                    [
+                        chunk
+                        for chunk in chunk_text(
+                            normalize(seg.text), max_chars=job.max_chars
+                        )
+                        if not is_prosody_marker(chunk)
+                    ]
+                )
                 for ch in chapters_to_process
                 for seg in ch.segments
             )
@@ -275,13 +329,27 @@ class AudiobookEngine:
         self._persist(job)
         return job
 
-    def _synthesize(
-        self, job: AudiobookJob, book: Book
-    ) -> None:
+    def _fail_job(self, job: AudiobookJob, exc: Exception) -> None:
+        """Persist a non-recoverable error and move the job to FAILED."""
+        job.error_message = f"{type(exc).__name__}: {exc}"
+        try:
+            job.transition(JobState.FAILED)
+        except InvalidStateTransition:
+            # Some states have no path to FAILED (e.g. cancelled);
+            # keep the current state but still record the error.
+            logger.debug(
+                "Job %s cannot transition to failed from %s",
+                job.id,
+                job.state.value,
+            )
+        self._persist(job)
+
+    def _synthesize(self, job: AudiobookJob, book: Book) -> None:
         """Synthesize all chapters and segments to WAV files."""
         work_dir = self._work_dir / job.id
         segments_dir = work_dir / "segments"
         segments_dir.mkdir(parents=True, exist_ok=True)
+        last_text_wav: Path | None = None
 
         for ch in book.chapters:
             # Skip if chapter index is not in the selection
@@ -292,37 +360,52 @@ class AudiobookEngine:
             ch_dir.mkdir(parents=True, exist_ok=True)
 
             num_segments = len(ch.segments)
+            previous_all_pause = False
             for seg_idx, seg in enumerate(ch.segments):
                 if job.state == JobState.CANCELLED:
                     return
 
-                cleaned = normalize(seg.text)
-                chunks = chunk_text(cleaned)
+                anchored_text = self._apply_chapter_title_anchor(
+                    seg.text, ch.title, seg_idx == 0
+                )
+                cleaned = normalize(anchored_text)
+                events = self._build_segment_events(
+                    chunk_text(cleaned, max_chars=job.max_chars), job
+                )
+                if not events:
+                    continue
+
+                all_pauses = all(event.text is None for event in events)
+                if all_pauses and previous_all_pause:
+                    # Consecutive anchor-only segments collapse into a
+                    # single effective pause (spec edge case).
+                    continue
+                previous_all_pause = all_pauses
 
                 seg_wavs: list[Path] = []
-                for i, chunk in enumerate(chunks):
+                for i, event in enumerate(events):
                     wav_path = (
-                        segments_dir
-                        / f"ch{ch.index:04d}_seg{seg.index:06d}_"
+                        segments_dir / f"ch{ch.index:04d}_seg{seg.index:06d}_"
                         f"chunk{i}.wav"
                     )
-                    if not wav_path.exists():
-                        self._tts.synthesize(
-                            chunk,
-                            job.language,
-                            job.voice,
-                            wav_path,
-                            speed=job.speed,
-                        )
+                    if event.text is not None:
+                        if not wav_path.exists():
+                            self._tts.synthesize(
+                                event.text,
+                                job.language,
+                                job.voice,
+                                wav_path,
+                                speed=job.speed,
+                            )
+                        job.completed_segments += 1
+                        last_text_wav = wav_path
+                    elif not wav_path.exists():
+                        self._write_pause_wav(wav_path, event.pause_ms, last_text_wav)
                     seg_wavs.append(wav_path)
-                    job.completed_segments += 1
 
                 # Merge chunk WAVs into one segment WAV
                 if len(seg_wavs) > 1:
-                    merged = (
-                        segments_dir
-                        / f"ch{ch.index:04d}_seg{seg.index:06d}.wav"
-                    )
+                    merged = segments_dir / f"ch{ch.index:04d}_seg{seg.index:06d}.wav"
                     merge_wav_files(seg_wavs, merged)
                 elif seg_wavs:
                     merged = seg_wavs[0]
@@ -331,23 +414,93 @@ class AudiobookEngine:
 
                 dest = ch_dir / f"seg_{seg.index:06d}.wav"
                 is_last_in_chapter = seg_idx == num_segments - 1
-                pause_ms = (
-                    job.chapter_pause_ms
-                    if is_last_in_chapter
-                    else job.paragraph_pause_ms
-                )
+                if all_pauses:
+                    # Anchor-only segment: no paragraph pause on top.
+                    pause_ms = job.chapter_pause_ms if is_last_in_chapter else 0
+                else:
+                    pause_ms = (
+                        job.chapter_pause_ms
+                        if is_last_in_chapter
+                        else job.paragraph_pause_ms
+                    )
                 append_silence_to_wav(merged, pause_ms, dest)
 
             # Persist at end of each chapter
             self._persist(job)
 
-    def _assemble(
-        self, job: AudiobookJob, work_dir: Path | None = None
-    ) -> None:
+    @staticmethod
+    def _apply_chapter_title_anchor(
+        text: str, chapter_title: str, is_first_segment: bool
+    ) -> str:
+        """Insert a title anchor when the chapter title is narrated.
+
+        Chapter titles extracted as metadata (EPUB/MOBI headings) are not
+        part of the audio, so they get no anchor (research R2). When the
+        title is narrated — first line identical to the chapter title —
+        a chapter-title marker is inserted right after it.
+        """
+        if not is_first_segment or not chapter_title.strip():
+            return text
+        lines = text.splitlines()
+        first_idx = next((i for i, line in enumerate(lines) if line.strip()), None)
+        if first_idx is None:
+            return text
+        if lines[first_idx].strip().casefold() != chapter_title.strip().casefold():
+            return text
+        lines.insert(first_idx + 1, CHAPTER_TITLE_MARKER)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_segment_events(
+        chunks: list[str], job: AudiobookJob
+    ) -> list[_SynthEvent]:
+        """Turn chunks into text events and coalesced pause events.
+
+        Consecutive prosody anchors collapse into a single pause (the
+        largest configured one) so pauses never accumulate.
+        """
+        events: list[_SynthEvent] = []
+        for chunk in chunks:
+            stripped = chunk.strip()
+            if stripped == SCENE_BREAK_MARKER:
+                pause_ms = job.scene_break_pause_ms
+            elif stripped == CHAPTER_TITLE_MARKER:
+                pause_ms = job.chapter_title_pause_ms
+            elif is_prosody_marker(stripped):
+                pause_ms = max(
+                    job.scene_break_pause_ms,
+                    job.chapter_title_pause_ms,
+                )
+            else:
+                events.append(_SynthEvent(text=chunk))
+                continue
+
+            if events and events[-1].text is None:
+                previous = events[-1]
+                events[-1] = _SynthEvent(pause_ms=max(previous.pause_ms, pause_ms))
+            else:
+                events.append(_SynthEvent(pause_ms=pause_ms))
+        return events
+
+    @staticmethod
+    def _write_pause_wav(path: Path, duration_ms: int, reference: Path | None) -> None:
+        """Write a silence WAV for a prosody anchor.
+
+        Matches the reference WAV parameters when available so segment
+        merging never mixes incompatible PCM formats.
+        """
+        if reference is not None and reference.exists():
+            create_silence_matching(reference, duration_ms, path)
+        else:
+            generate_silence_wav(path, duration_ms)
+
+    def _assemble(self, job: AudiobookJob, work_dir: Path | None = None) -> None:
         """Assemble WAV segments into the final output.
 
-        Uses FFmpeg to produce M4B with chapters and metadata when
-        available. Falls back to WAV merge when FFmpeg is missing.
+        The output format follows the requested extension (BD-2026-10-12-07):
+        `.m4b` requires FFmpeg and fails loudly on assembly errors (never
+        writing a WAV under a `.m4b` name — A-04); `.wav` merges the PCM
+        segments directly.
         """
         if work_dir is None:
             work_dir = self._work_dir / job.id
@@ -358,48 +511,46 @@ class AudiobookEngine:
         if job.output_path is None:
             return
 
-        # Try M4B assembly with FFmpeg
-        if ffmpeg.is_available():
+        suffix = job.output_path.suffix.lower()
+        if suffix not in (".m4b", ".wav"):
+            raise AudioAssemblyError(
+                f"Unsupported output extension '{suffix or '(none)'}'. "
+                "Use .m4b or .wav."
+            )
+
+        if suffix == ".m4b":
+            if not ffmpeg.is_available():
+                raise AudioAssemblyError("FFmpeg is required to produce .m4b output")
             book = self._books[job.id]
             voice = job.voice
-            raw_backend = (
-                job.backend or getattr(self._tts, "name", "kokoro")
-            )
+            raw_backend = job.backend or getattr(self._tts, "name", "kokoro")
             backend = (
                 raw_backend
                 if isinstance(raw_backend, str) and raw_backend
                 else "kokoro"
             )
-            narrator = (
-                f"{voice} - {backend}" if voice and backend else voice
+            narrator = f"{voice} - {backend}" if voice and backend else voice
+            assemble_m4b(
+                job=job,
+                book=book,
+                chapters_dir=chapters_dir,
+                output_path=job.output_path,
+                narrator=narrator,
             )
-            try:
-                assemble_m4b(
-                    job=job,
-                    book=book,
-                    chapters_dir=chapters_dir,
-                    output_path=job.output_path,
-                    narrator=narrator,
-                )
-                return
-            except Exception as exc:
-                logger.warning(
-                    "M4B assembly failed, falling back to WAV: %s",
-                    exc,
-                )
+            return
 
-        # Fallback: merge WAV files
+        # `.wav`: merge the segment WAVs (no codec re-encoding)
         all_wavs: list[Path] = []
         if chapters_dir.exists():
             for ch_dir in sorted(
                 chapters_dir.iterdir(),
-                key=lambda p: _extract_chapter_index_from_dir(p.name)
+                key=lambda p: _extract_chapter_index_from_dir(p.name),
             ):
                 if ch_dir.is_dir():
                     all_wavs.extend(
                         sorted(
                             ch_dir.glob("seg_*.wav"),
-                            key=lambda p: _extract_segment_index_from_file(p.stem)
+                            key=lambda p: _extract_segment_index_from_file(p.stem),
                         )
                     )
 
@@ -407,12 +558,8 @@ class AudiobookEngine:
             final_output = output_dir / "final.wav"
             merge_wav_files(all_wavs, final_output)
 
-            job.output_path.parent.mkdir(
-                parents=True, exist_ok=True
-            )
-            shutil.copy2(
-                str(final_output), str(job.output_path)
-            )
+            job.output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(final_output), str(job.output_path))
 
     def _cleanup_intermediates(self, job: AudiobookJob) -> None:
         """Remove intermediate WAV files after successful assembly.
@@ -455,9 +602,7 @@ class AudiobookEngine:
 
         job = self.get_job(job_id)
         if not job.can_resume():
-            raise JobError(
-                f"Job cannot be resumed from state {job.state.value}"
-            )
+            raise JobError(f"Job cannot be resumed from state {job.state.value}")
         # Reset completed_segments for accurate recount
         job.completed_segments = 0
         return self.run(job_id)
@@ -487,8 +632,7 @@ class AudiobookEngine:
                 book = self._parser.inspect(job.source_path)
                 self._books[job.id] = book
                 logger.info(
-                    "Re-inspected book for reassemble: "
-                    "cover_path=%s",
+                    "Re-inspected book for reassemble: cover_path=%s",
                     book.cover_path,
                 )
 

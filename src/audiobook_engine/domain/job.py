@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -50,7 +50,12 @@ _TRANSITIONS: dict[JobState, set[JobState]] = {
 }
 
 _RESUMABLE_STATES: frozenset[JobState] = frozenset(
-    {JobState.SYNTHESIZING, JobState.ASSEMBLING}
+    {
+        JobState.CREATED,
+        JobState.READY,
+        JobState.SYNTHESIZING,
+        JobState.ASSEMBLING,
+    }
 )
 
 
@@ -77,6 +82,9 @@ class AudiobookJob:
     scene_break_pause_ms: int = 1500
     chapter_title_pause_ms: int = 1200
 
+    # Chunking (persisted so inspect and synthesis stop diverging)
+    max_chars: int = 500
+
     # Paths
     work_dir: Path | None = None
     output_path: Path | None = None
@@ -93,23 +101,18 @@ class AudiobookJob:
     error_message: str | None = None
 
     # Timestamps
-    created_at: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
-    updated_at: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def transition(self, target: JobState) -> None:
         """Transition to a new state, raising on invalid transitions."""
         allowed = _TRANSITIONS.get(self.state, set())
         if target not in allowed:
             raise InvalidStateTransition(
-                f"Cannot transition from {self.state.value} "
-                f"to {target.value}"
+                f"Cannot transition from {self.state.value} to {target.value}"
             )
         self.state = target
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(UTC)
 
     def can_resume(self) -> bool:
         """Return True if the job is in a state that supports resume."""

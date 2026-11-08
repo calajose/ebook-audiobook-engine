@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased] - 2026-11-08
+
+### Fixed
+- **Business-requested anomaly corrections (SPEC-013)**:
+  - `--scene-break-pause` (1500 ms) and `--chapter-title-pause` (1200 ms) now produce real audible pauses: section separators (`***`, `---`, `• • •`) and narrated chapter titles are detected before noise removal and turned into silence at the configured positions.
+  - `--max-chars` is now persisted in the job and drives the real synthesis; `inspect` and `convert` no longer diverge.
+  - `resume` now accepts jobs interrupted in `created` and `ready`, not only `synthesizing`/`assembling`.
+  - A non-recoverable error transitions the job to `failed` with `error_message` persisted in `job.json` instead of leaving it stuck in its phase.
+  - Requesting `.m4b` output now fails hard with a clear error when assembly fails: the misleading WAV-under-`.m4b` fallback has been removed.
+  - `convert` validates `--chapters` against the real book index and `--output` against format/FFmpeg availability before creating a job.
+  - A conversion that ends without audible content stays `completed` and prints an explicit console warning.
+  - Unified EPUB/MOBI/AZW3 cover extraction: correct OPF namespace, XHTML wrapper unwrapping and identical fallbacks for both formats. Covers are still written next to the user's ebook.
+
+### Changed
+- Python 3.13 is now the official minimum (`requires-python` and mypy target).
+
+### Removed
+- The `[api]` extra and its FastAPI/Uvicorn dependencies, plus the HTTP service and Calibre integration promises from packaging and documentation (the protected "No Calibre" rule remains).
+
+---
+
 ## [0.6.0] - 2026-08-31
 
 ### Added

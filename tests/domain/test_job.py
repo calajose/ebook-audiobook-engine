@@ -98,8 +98,21 @@ class TestAudiobookJob:
         job.transition(JobState.ASSEMBLING)
         assert job.can_resume()
 
-    def test_cannot_resume_from_created(self) -> None:
+    def test_can_resume_from_created(self) -> None:
         job = AudiobookJob()
+        assert job.state == JobState.CREATED
+        assert job.can_resume()
+
+    def test_can_resume_from_ready(self) -> None:
+        job = AudiobookJob()
+        job.transition(JobState.ANALYZING)
+        job.transition(JobState.READY)
+        assert job.can_resume()
+
+    def test_cannot_resume_from_failed(self) -> None:
+        job = AudiobookJob()
+        job.transition(JobState.ANALYZING)
+        job.transition(JobState.FAILED)
         assert not job.can_resume()
 
     def test_cannot_resume_from_completed(self) -> None:

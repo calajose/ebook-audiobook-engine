@@ -20,7 +20,7 @@ No CI, Makefile, or lockfile exists — the local venv is the source of truth.
 The package is installed editable in `.venv/`:
 
 ```bash
-./.venv/bin/pytest                 # full suite: 304 tests, ~2s, fully mocked
+./.venv/bin/pytest                 # full suite: 347 tests, ~2s, fully mocked
 ./.venv/bin/ruff check src tests   # scope matters — see below
 ./.venv/bin/mypy src tests
 ./.venv/bin/audiobook-engine --help  # CLI console script
@@ -49,8 +49,7 @@ src/audiobook_engine/
 │   ├── metadata/       # (empty placeholder)
 │   └── persistence/job_store.py  # job.json serialization
 └── interfaces/
-    ├── cli/main.py     # Typer CLI (console script: audiobook-engine)
-    └── api/            # empty placeholder — HTTP service not started (plan Phase 10)
+    └── cli/main.py     # Typer CLI (console script: audiobook-engine)
 ```
 
 - Entrypoints: CLI `audiobook_engine.interfaces.cli.main:app`; Python API `AudiobookEngine`.
@@ -59,25 +58,41 @@ src/audiobook_engine/
 
 ## Prosody & audio — verified behavior
 
-- **Only two pauses are actually applied** in `engine.py::_synthesize`: paragraph pause
-  (default 700ms) after every segment, chapter pause (2500ms) on the chapter's last segment.
-- **Gotcha:** `scene_break_pause_ms` (1500) and `chapter_title_pause_ms` (1200) exist as
-  CLI/job fields and persist to `job.json`, but **no code consumes them yet**. Separator
-  lines (`***`, `---`, `• • •`) are *removed as noise* by `remove_noise()` inside
-  `normalize()` before synthesis. Don't claim they work; wire them up if asked to.
+- **Four pauses are actually applied** by `engine.py::_synthesize`: paragraph pause
+  (default 700ms) after every segment, chapter pause (2500ms) on the chapter's last segment
+  (replacing the paragraph pause), scene-break pause (1500ms) at section separators and
+  chapter-title pause (1200ms) after a narrated chapter title.
+- **Anchors, not noise:** `remove_noise()` inside `normalize()` no longer drops separator
+  lines (`***`, `---`, `• • •`) or standalone `Capítulo N`/`Chapter N` lines. It replaces
+  them with the internal sentinels `\x00SCENE_BREAK\x00` / `\x00CHAPTER_TITLE\x00`
+  (`normalizer.py`). `chunk_text()` keeps every marker as its own standalone chunk and
+  `engine._build_segment_events()` turns it into silence at the configured duration.
+  Consecutive anchors coalesce into one pause; an anchor-only segment gets no paragraph
+  pause on top.
+- **Chapter titles that only live in metadata** (EPUB/MOBI headings stripped by the parsers)
+  are not narrated, so they get no audible title pause. The title pause applies when the
+  title is narrated (TXT books, title paragraphs, `Capítulo N` lines).
 - Silence is exact PCM zero frames appended to the segment WAV (`append_silence_to_wav`),
   so `m4b_assembler.py` chapter marks (measured from WAV headers) match FFmpeg output exactly.
 - Kokoro backend: speed clamped to `0.5–2.0`; ~80ms zero tail pad after synthesis to protect
   rising intonation on short questions. `normalize_dialogue()` converts `- `/`– ` to em-dash
   and guillemets/curly quotes to straight quotes before phonemization.
 - Chunker: `DEFAULT_MAX_CHARS = 500`, sentence-boundary aware; lowercase dialogue tags
-  (`—preguntó ella`) stay attached to the preceding quote.
+  (`—preguntó ella`) stay attached to the preceding quote. The job's persisted `max_chars`
+  drives real synthesis, so `inspect --max-chars` and `convert --max-chars` agree (`job.json`
+  field added additively; absent → 500).
 
 ## Job state machine & persistence
 
 - States: `CREATED → ANALYZING → READY → SYNTHESIZING → ASSEMBLING → COMPLETED`;
   plus `FAILED` / `CANCELLED`. Transition table lives in `domain/job.py`.
-- Resume-eligible: `SYNTHESIZING`, `ASSEMBLING` only (`_RESUMABLE_STATES`).
+- Non-recoverable errors transition the job to `FAILED` with `error_message` persisted;
+  the CLI reports it without a traceback.
+- Resume-eligible: `CREATED`, `READY`, `SYNTHESIZING`, `ASSEMBLING` (`_RESUMABLE_STATES`).
+- Output format follows the extension: `.m4b` needs FFmpeg and fails loudly on assembly
+  errors (no WAV-under-`.m4b` fallback); `.wav` merges PCM directly. `convert` validates
+  `--chapters` against the real index and `--output` against format/FFmpeg availability
+  before creating a job.
 - Synthesis is idempotent: WAV paths are deterministic
   (`ch{chapter:04d}_seg{segment:06d}_chunk{i}.wav`); an existing file is skipped.
 - Jobs live in `work/<job-id>/` (default `work/`, gitignored).

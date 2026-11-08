@@ -4,13 +4,12 @@
 
 `ebook-audiobook-engine` is an independent, reusable local audiobook-conversion engine. It converts supported ebooks into audiobooks through pluggable TTS backends; Kokoro is the first backend.
 
-It has **no dependency on Calibre** and supports three first-class modes:
+It has **no dependency on Calibre** and supports two first-class modes:
 
 1. **Standalone CLI** — conversion without running a service.
 2. **Python API** — direct in-process use by other applications.
-3. **Local HTTP service** — for Calibre and other external clients.
 
-All three modes use the same domain/application pipeline.
+Both modes use the same domain/application pipeline.
 
 ## Architectural principles
 
@@ -21,9 +20,8 @@ All three modes use the same domain/application pipeline.
 - Resumable jobs.
 - Deterministic text extraction/chunking.
 - No Calibre dependency.
-- HTTP service optional for standalone use.
 - Dynamic language/voice capabilities.
-- Thin CLI and HTTP adapters.
+- Thin CLI adapters.
 - One conversion pipeline, not separate implementations per interface.
 
 ## High-level architecture
@@ -188,41 +186,13 @@ engine.run(job.id)
 
 It must not require HTTP for in-process applications.
 
-## HTTP service
-
-Minimum conceptual endpoints:
-
-```text
-GET  /capabilities
-GET  /languages
-GET  /voices?language=...
-POST /books/inspect
-POST /jobs
-GET  /jobs/{id}
-POST /jobs/{id}/resume
-POST /jobs/{id}/cancel
-```
-
-The service binds to localhost by default, validates requests, returns structured errors and exposes persisted job progress.
-
-## External clients
-
-Separate applications should use the HTTP contract:
-
-```text
-Calibre plugin ──HTTP──> engine service
-Other app      ──HTTP──> engine service
-CLI            ──direct─> application layer
-Python app     ──direct─> Python API
-```
-
 ## Audio assembly
 
 Intermediate synthesis uses WAV or another lossless format. FFmpeg is the initial implementation for M4B assembly, including ordering, chapters, metadata, cover and encoding.
 
 ## Configuration
 
-Support backend, model path, work/output directories, default language/voice, FFmpeg path, concurrency, logging and HTTP bind address/port. Defaults must not assume Spanish.
+Support backend, model path, work/output directories, default language/voice, FFmpeg path, concurrency and logging. Defaults must not assume Spanish.
 
 ## Testing
 
@@ -234,4 +204,4 @@ EPUB -> Book -> Chapters -> Segments -> Kokoro -> WAV -> M4B
 
 ## Architectural decision
 
-`ebook-audiobook-engine` is the independent product. It can be executed directly, imported as a Python library or run as a local service. Calibre is not part of the engine.
+`ebook-audiobook-engine` is the independent product. It can be executed directly or imported as a Python library. Calibre is not part of the engine.

@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import re
 
+from audiobook_engine.infrastructure.ebook.normalizer import (
+    is_prosody_marker,
+)
+
 # Default maximum characters per chunk.
 # Most TTS engines handle 200-500 characters well.
 DEFAULT_MAX_CHARS: int = 500
@@ -18,10 +22,34 @@ _SENTENCE_END_RE = re.compile(r'([.!?]+[\u201d\u2019"»\u2014-]*)(?:\s+|$)')
 # Abbreviations that should NOT trigger a sentence break
 _ABBREVIATIONS = frozenset(
     {
-        "mr", "mrs", "ms", "dr", "prof", "sr", "sra", "srta", "jr", "st",
-        "vs", "etc", "inc", "ltd", "corp",
-        "fig", "eq", "vol", "no", "ch", "pp", "ed", "trans",
-        "pág", "págs", "art", "d", "dña",
+        "mr",
+        "mrs",
+        "ms",
+        "dr",
+        "prof",
+        "sr",
+        "sra",
+        "srta",
+        "jr",
+        "st",
+        "vs",
+        "etc",
+        "inc",
+        "ltd",
+        "corp",
+        "fig",
+        "eq",
+        "vol",
+        "no",
+        "ch",
+        "pp",
+        "ed",
+        "trans",
+        "pág",
+        "págs",
+        "art",
+        "d",
+        "dña",
     }
 )
 
@@ -87,7 +115,38 @@ def chunk_text(
     - A single sentence exceeding max_chars becomes its own chunk.
     - Chunks are as large as possible without exceeding max_chars.
     - Deterministic: same input always produces same output.
+    - Prosody markers are never merged with text: each marker line
+      becomes its own chunk so the synthesis layer can turn it into a
+      pause at the right position.
     """
+    if not text.strip():
+        return []
+
+    lines = text.splitlines()
+    if not any(is_prosody_marker(line) for line in lines):
+        return _chunk_plain(text, max_chars)
+
+    chunks: list[str] = []
+    buffer: list[str] = []
+
+    def _flush() -> None:
+        if buffer:
+            chunks.extend(_chunk_plain("\n".join(buffer), max_chars))
+            buffer.clear()
+
+    for line in lines:
+        if is_prosody_marker(line):
+            _flush()
+            chunks.append(line.strip())
+        else:
+            buffer.append(line)
+    _flush()
+
+    return chunks or [text.strip()]
+
+
+def _chunk_plain(text: str, max_chars: int) -> list[str]:
+    """Chunk text that contains no prosody markers."""
     if not text.strip():
         return []
 
@@ -99,9 +158,7 @@ def chunk_text(
     current = ""
 
     for sentence in sentences:
-        candidate = (
-            (current + " " + sentence).strip() if current else sentence
-        )
+        candidate = (current + " " + sentence).strip() if current else sentence
 
         if len(candidate) <= max_chars:
             current = candidate

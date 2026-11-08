@@ -102,9 +102,39 @@ class TestNormalize:
         assert normalize("") == ""
 
     def test_only_noise(self) -> None:
-        text = "Page 1\n***\nPage 2"
+        text = "Page 1\nPage 2"
         result = normalize(text)
         assert result == ""
+
+    def test_separator_becomes_scene_marker(self) -> None:
+        from audiobook_engine.infrastructure.ebook.normalizer import (
+            SCENE_BREAK_MARKER,
+        )
+
+        for separator in ("***", "---", "• • •"):
+            assert normalize(f"A\n{separator}\nB") == (f"A\n{SCENE_BREAK_MARKER}\nB")
+
+    def test_chapter_number_line_becomes_title_marker(self) -> None:
+        from audiobook_engine.infrastructure.ebook.normalizer import (
+            CHAPTER_TITLE_MARKER,
+        )
+
+        assert normalize("Capítulo 5") == CHAPTER_TITLE_MARKER
+        assert normalize("Chapter 12") == CHAPTER_TITLE_MARKER
+
+    def test_other_noise_still_removed(self) -> None:
+        text = "Page 1\nReal text.\nCopyright © 2020"
+        assert normalize(text) == "Real text."
+
+    def test_separator_is_no_longer_narrated(self) -> None:
+        """A separator becomes a marker, never audible text."""
+        from audiobook_engine.infrastructure.ebook.normalizer import (
+            is_prosody_marker,
+        )
+
+        result = normalize("A\n***\nB")
+        assert "***" not in result
+        assert any(is_prosody_marker(line) for line in result.splitlines())
 
     def test_preserves_paragraph_structure(self) -> None:
         text = "First paragraph.\n\nSecond paragraph."

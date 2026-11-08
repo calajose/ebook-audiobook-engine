@@ -5,13 +5,17 @@ from __future__ import annotations
 import html
 import re
 import zipfile
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import ebooklib  # type: ignore[import-untyped]
 from ebooklib import epub
 
 from audiobook_engine.domain.exceptions import EbookError
 from audiobook_engine.domain.models import Book, Chapter, TextSegment
+from audiobook_engine.infrastructure.ebook.cover import extract_cover
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class EPUBParser:
@@ -87,145 +91,18 @@ class EPUBParser:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _save_item_as_cover(
-        item: epub.EpubItem | None, book: epub.EpubBook, source_path: Path
-    ) -> Path | None:
-        if item is None:
-            return None
-        content = item.get_content()
-        if not content:
-            return None
-
-        item_name = item.get_name() or ""
-        media_type = getattr(item, "media_type", "") or ""
-        suffix = Path(item_name).suffix.lower()
-        image_suffixes = (".jpg", ".jpeg", ".png", ".gif", ".webp")
-        is_image = (
-            item.get_type() == ebooklib.ITEM_IMAGE
-            or media_type.startswith("image/")
-            or suffix in image_suffixes
-        )
-
-        if is_image:
-            ext = suffix or ".jpg"
-            out = source_path.parent / f"{source_path.stem}_cover{ext}"
-            out.write_bytes(content)
-            return out
-
-        is_html = (
-            suffix in (".xhtml", ".html", ".htm")
-            or "html" in media_type.lower()
-            or b"<html" in content[:100].lower()
-        )
-        if is_html:
-            html_text = content.decode("utf-8", errors="replace")
-            img_match = re.search(
-                r'<img[^>]+src=["\']([^"\']+)["\']',
-                html_text,
-                re.IGNORECASE,
-            )
-            if img_match:
-                img_src = img_match.group(1)
-                img_filename = Path(img_src).name.lower()
-                for sub_item in book.get_items():
-                    sub_name = sub_item.get_name() or ""
-                    sub_media = getattr(sub_item, "media_type", "") or ""
-                    sub_suffix = Path(sub_name).suffix.lower()
-                    sub_is_image = (
-                        sub_item.get_type() == ebooklib.ITEM_IMAGE
-                        or sub_media.startswith("image/")
-                        or sub_suffix in image_suffixes
-                    )
-                    matches_name = (
-                        sub_name.lower().endswith(img_filename)
-                        or img_filename in sub_name.lower()
-                    )
-                    if sub_is_image and matches_name:
-                        sub_content = sub_item.get_content()
-                        if sub_content:
-                            sub_ext = sub_suffix or ".jpg"
-                            out = (
-                                source_path.parent
-                                / f"{source_path.stem}_cover{sub_ext}"
-                            )
-                            out.write_bytes(sub_content)
-                            return out
-        return None
-
-    @staticmethod
-    def _extract_cover(
-        book: epub.EpubBook, source_path: Path
-    ) -> Path | None:
-        # EPUB3: look for EpubCover items (properties="cover-image")
-        for item in book.get_items():
-            if isinstance(item, epub.EpubCover):
-                res = EPUBParser._save_item_as_cover(item, book, source_path)
-                if res:
-                    return res
-
-        # EPUB2 fallback: look in OPF meta metadata
-        opf_ns = "OPF"
-        meta_entries = book.metadata.get(opf_ns, {}).get("meta", [])
-        for _val, others in meta_entries:
-            if others and others.get("name") == "cover":
-                cover_id = others.get("content", "")
-                if cover_id:
-                    item = book.get_item_with_id(cover_id)
-                    res = EPUBParser._save_item_as_cover(item, book, source_path)
-                    if res:
-                        return res
-
-        # Direct fallback: try item with id="cover" regardless of metadata
-        item = book.get_item_with_id("cover")
-        res = EPUBParser._save_item_as_cover(item, book, source_path)
-        if res:
-            return res
-
-        # Fallback: item ID or filename contains "cover" (case-insensitive)
-        for item in book.get_items():
-            item_id = item.get_id() or ""
-            item_name = item.get_name() or ""
-            if "cover" in item_id.lower() or "cover" in Path(item_name).name.lower():
-                res = EPUBParser._save_item_as_cover(item, book, source_path)
-                if res:
-                    return res
-
-        # Fallback: first image item in the book
-        for item in book.get_items():
-            media_type = getattr(item, "media_type", "") or ""
-            item_name = item.get_name() or ""
-            suffix = Path(item_name).suffix.lower()
-            is_image = (
-                item.get_type() == ebooklib.ITEM_IMAGE
-                or media_type.startswith("image/")
-                or suffix in (".jpg", ".jpeg", ".png", ".gif", ".webp")
-            )
-            if is_image:
-                content = item.get_content()
-                if content:
-                    out = (
-                        source_path.parent
-                        / f"{source_path.stem}_cover{suffix or '.jpg'}"
-                    )
-                    out.write_bytes(content)
-                    return out
-
-        return None
+    def _extract_cover(book: epub.EpubBook, source_path: Path) -> Path | None:
+        """Extract the cover through the shared EPUB/MOBI logic (A-08)."""
+        return extract_cover(book, source_path)
 
     # ------------------------------------------------------------------
     # Spine-ordered chapter extraction
     # ------------------------------------------------------------------
 
-    def _extract_chapters(
-        self, book: epub.EpubBook
-    ) -> tuple[Chapter, ...]:
+    def _extract_chapters(self, book: epub.EpubBook) -> tuple[Chapter, ...]:
         # Filter out navigation items (nav, ncx) from spine
         skip_ids = {"nav", "ncx"}
-        spine_ids = [
-            item_id
-            for item_id, _ in book.spine
-            if item_id not in skip_ids
-        ]
+        spine_ids = [item_id for item_id, _ in book.spine if item_id not in skip_ids]
         spine_items = {
             item.get_id(): item
             for item in book.get_items()
@@ -240,13 +117,9 @@ class EPUBParser:
             if item is None:
                 continue
 
-            content = item.get_content().decode(
-                "utf-8", errors="replace"
-            )
+            content = item.get_content().decode("utf-8", errors="replace")
             heading = self._extract_heading(content)
-            segments, seg_index = self._extract_segments(
-                content, seg_index
-            )
+            segments, seg_index = self._extract_segments(content, seg_index)
 
             if segments:
                 chapters.append(
@@ -324,9 +197,7 @@ class EPUBParser:
         if not normalized:
             return (), start_index
 
-        paragraphs = [
-            p for p in normalized.split("\n") if p.strip()
-        ]
+        paragraphs = [p for p in normalized.split("\n") if p.strip()]
 
         segments = tuple(
             TextSegment(text=para, index=start_index + i)

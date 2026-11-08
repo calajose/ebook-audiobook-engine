@@ -69,9 +69,7 @@ class TestSaveAndLoad:
         with pytest.raises(FileNotFoundError, match="No job.json"):
             load_job(tmp_path)
 
-    def test_round_trip_preserves_none_fields(
-        self, tmp_path: Path
-    ) -> None:
+    def test_round_trip_preserves_none_fields(self, tmp_path: Path) -> None:
         job = AudiobookJob(
             id="minimal",
             source_path=None,
@@ -88,9 +86,7 @@ class TestSaveAndLoad:
 class TestFindResumableJobs:
     def test_finds_synthesizing_job(self, tmp_path: Path) -> None:
         work = tmp_path / "jobs" / "j1"
-        job = _make_job(
-            state=JobState.SYNTHESIZING, work_dir=work
-        )
+        job = _make_job(state=JobState.SYNTHESIZING, work_dir=work)
         save_job(job, work)
         results = find_resumable_jobs(tmp_path / "jobs")
         assert len(results) == 1
@@ -98,18 +94,14 @@ class TestFindResumableJobs:
 
     def test_finds_assembling_job(self, tmp_path: Path) -> None:
         work = tmp_path / "jobs" / "j1"
-        job = _make_job(
-            state=JobState.ASSEMBLING, work_dir=work
-        )
+        job = _make_job(state=JobState.ASSEMBLING, work_dir=work)
         save_job(job, work)
         results = find_resumable_jobs(tmp_path / "jobs")
         assert len(results) == 1
 
     def test_ignores_completed_job(self, tmp_path: Path) -> None:
         work = tmp_path / "jobs" / "j1"
-        job = _make_job(
-            state=JobState.COMPLETED, work_dir=work
-        )
+        job = _make_job(state=JobState.COMPLETED, work_dir=work)
         save_job(job, work)
         results = find_resumable_jobs(tmp_path / "jobs")
         assert len(results) == 0
@@ -121,15 +113,11 @@ class TestFindResumableJobs:
         results = find_resumable_jobs(tmp_path / "jobs")
         assert len(results) == 0
 
-    def test_nonexistent_dir_returns_empty(
-        self, tmp_path: Path
-    ) -> None:
+    def test_nonexistent_dir_returns_empty(self, tmp_path: Path) -> None:
         results = find_resumable_jobs(tmp_path / "nope")
         assert results == []
 
-    def test_ignores_dirs_without_job_json(
-        self, tmp_path: Path
-    ) -> None:
+    def test_ignores_dirs_without_job_json(self, tmp_path: Path) -> None:
         (tmp_path / "not-a-job").mkdir()
         results = find_resumable_jobs(tmp_path)
         assert results == []
@@ -171,3 +159,30 @@ class TestFindAllJobs:
 
         results = find_all_jobs(tmp_path)
         assert results == []
+
+
+class TestMaxCharsPersistence:
+    def test_max_chars_round_trip(self, tmp_path: Path) -> None:
+        job = _make_job()
+        job.max_chars = 250
+        save_job(job, tmp_path)
+        loaded = load_job(tmp_path)
+        assert loaded.max_chars == 250
+
+    def test_old_job_without_max_chars_reads_default_without_rewrite(
+        self, tmp_path: Path
+    ) -> None:
+        import json
+
+        job = _make_job()
+        save_job(job, tmp_path)
+        path = tmp_path / "job.json"
+        data = json.loads(path.read_text())
+        data.pop("max_chars", None)
+        path.write_text(json.dumps(data))
+        before = path.read_bytes()
+
+        loaded = load_job(tmp_path)
+
+        assert loaded.max_chars == 500
+        assert path.read_bytes() == before

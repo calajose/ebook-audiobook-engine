@@ -78,9 +78,7 @@ def _create_ncx(
         parts.append("<navLabel>")
         parts.append(f"<text>{label}</text>")
         parts.append("</navLabel>")
-        parts.append(
-            f'<content src="book.html#filepos{filepos}"/>'
-        )
+        parts.append(f'<content src="book.html#filepos{filepos}"/>')
         parts.append("</navPoint>")
     parts.append("</navMap></ncx>")
     (directory / "toc.ncx").write_text("\n".join(parts), encoding="utf-8")
@@ -91,9 +89,7 @@ class TestValidation:
         with pytest.raises(EbookError, match="not found"):
             parser.inspect(Path("/nonexistent/book.azw3"))
 
-    def test_not_mobi_extension(
-        self, parser: MOBIParser, tmp_path: Path
-    ) -> None:
+    def test_not_mobi_extension(self, parser: MOBIParser, tmp_path: Path) -> None:
         epub = tmp_path / "book.epub"
         epub.write_bytes(b"not a real file")
         with pytest.raises(EbookError, match="Not a MOBI"):
@@ -131,9 +127,7 @@ class TestProtocol:
 class TestExtractFromEPUB:
     """Test parsing when mobi.extract() returns an EPUB (AZW3/KF8)."""
 
-    def test_epub_extraction(
-        self, parser: MOBIParser, tmp_path: Path
-    ) -> None:
+    def test_epub_extraction(self, parser: MOBIParser, tmp_path: Path) -> None:
         """Test parsing with EPUB extraction (AZW3 flow)."""
         # Create a real EPUB to use as the extracted output
         epub_path = tmp_path / "extracted.epub"
@@ -166,9 +160,7 @@ class TestExtractFromEPUB:
         assert book.chapters[0].title == "Chapter 1"
         assert book.chapters[1].title == "Chapter 2"
 
-    def test_epub_segment_content(
-        self, parser: MOBIParser, tmp_path: Path
-    ) -> None:
+    def test_epub_segment_content(self, parser: MOBIParser, tmp_path: Path) -> None:
         """Test that paragraph content is correctly extracted."""
         epub_path = tmp_path / "extracted.epub"
         build_epub(
@@ -203,10 +195,7 @@ class TestExtractFromHTML:
         """Test parsing with HTML extraction (no headings, no OPF)."""
         html_path = tmp_path / "book.html"
         html_path.write_text(
-            "<html><body>"
-            "<p>First paragraph.</p>"
-            "<p>Second paragraph.</p>"
-            "</body></html>"
+            "<html><body><p>First paragraph.</p><p>Second paragraph.</p></body></html>"
         )
 
         mobi_path = tmp_path / "book.mobi"
@@ -306,14 +295,10 @@ class TestExtractFromHTML:
 class TestOPFMetadata:
     """Test metadata extraction from content.opf in HTML path."""
 
-    def test_opf_language_and_author(
-        self, parser: MOBIParser, tmp_path: Path
-    ) -> None:
+    def test_opf_language_and_author(self, parser: MOBIParser, tmp_path: Path) -> None:
         """OPF language and author override HTML defaults."""
         html_path = tmp_path / "book.html"
-        html_path.write_text(
-            "<html><body><p>Content.</p></body></html>"
-        )
+        html_path.write_text("<html><body><p>Content.</p></body></html>")
         _create_opf(
             tmp_path,
             title="Libro en Español",
@@ -389,7 +374,7 @@ class TestNCXChapters:
         """NCX entries with filepos anchors split HTML into chapters."""
         html_path = tmp_path / "book.html"
         html_path.write_text(
-            '<html><body>'
+            "<html><body>"
             '<a id="filepos100" />'
             "<p>Intro text.</p>"
             '<a id="filepos500" />'
@@ -421,13 +406,11 @@ class TestNCXChapters:
         assert book.chapters[1].title == "Chapter 1"
         assert book.chapters[2].title == "Chapter 2"
 
-    def test_ncx_chapter_content(
-        self, parser: MOBIParser, tmp_path: Path
-    ) -> None:
+    def test_ncx_chapter_content(self, parser: MOBIParser, tmp_path: Path) -> None:
         """Each chapter contains only text between its anchors."""
         html_path = tmp_path / "book.html"
         html_path.write_text(
-            '<html><body>'
+            "<html><body>"
             '<a id="filepos10" />'
             "<p>First content.</p>"
             '<a id="filepos200" />'
@@ -459,10 +442,7 @@ class TestNCXChapters:
         """NCX entries whose filepos anchor is missing in HTML are skipped."""
         html_path = tmp_path / "book.html"
         html_path.write_text(
-            '<html><body>'
-            '<a id="filepos10" />'
-            "<p>Only content.</p>"
-            "</body></html>"
+            '<html><body><a id="filepos10" /><p>Only content.</p></body></html>'
         )
         _create_ncx(
             tmp_path,
@@ -481,9 +461,7 @@ class TestNCXChapters:
         assert len(book.chapters) == 1
         assert book.chapters[0].title == "Existing"
 
-    def test_ncx_fallback_to_headings(
-        self, parser: MOBIParser, tmp_path: Path
-    ) -> None:
+    def test_ncx_fallback_to_headings(self, parser: MOBIParser, tmp_path: Path) -> None:
         """Without NCX, falls back to h1-h3 heading splitting."""
         html_path = tmp_path / "book.html"
         html_path.write_text(
@@ -509,16 +487,11 @@ class TestNCXChapters:
         assert book.chapters[0].title == "Chapter A"
         assert book.chapters[1].title == "Chapter B"
 
-    def test_ncx_empty_ncx_falls_back(
-        self, parser: MOBIParser, tmp_path: Path
-    ) -> None:
+    def test_ncx_empty_ncx_falls_back(self, parser: MOBIParser, tmp_path: Path) -> None:
         """Empty/unparseable NCX falls back to heading detection."""
         html_path = tmp_path / "book.html"
         html_path.write_text(
-            "<html><body>"
-            "<h1>Heading Chapter</h1>"
-            "<p>Some content.</p>"
-            "</body></html>"
+            "<html><body><h1>Heading Chapter</h1><p>Some content.</p></body></html>"
         )
         # Write an invalid NCX
         (tmp_path / "toc.ncx").write_text("not xml", encoding="utf-8")
@@ -537,9 +510,7 @@ class TestNCXChapters:
 
 
 class TestDRMDetection:
-    def test_drm_error_message(
-        self, parser: MOBIParser, tmp_path: Path
-    ) -> None:
+    def test_drm_error_message(self, parser: MOBIParser, tmp_path: Path) -> None:
         """Test that DRM-protected files raise clear error."""
         mobi_path = tmp_path / "drm_book.azw3"
         mobi_path.write_bytes(b"\x00" * 8)
@@ -547,15 +518,11 @@ class TestDRMDetection:
         with patch(
             "audiobook_engine.infrastructure.ebook.mobi_parser.mobi.extract"
         ) as mock_extract:
-            mock_extract.side_effect = ValueError(
-                "DRM protected content"
-            )
+            mock_extract.side_effect = ValueError("DRM protected content")
             with pytest.raises(EbookError, match="DRM"):
                 parser.inspect(mobi_path)
 
-    def test_encrypted_error_message(
-        self, parser: MOBIParser, tmp_path: Path
-    ) -> None:
+    def test_encrypted_error_message(self, parser: MOBIParser, tmp_path: Path) -> None:
         """Test that encrypted files raise clear error."""
         mobi_path = tmp_path / "encrypted.azw"
         mobi_path.write_bytes(b"\x00" * 8)
@@ -563,9 +530,7 @@ class TestDRMDetection:
         with patch(
             "audiobook_engine.infrastructure.ebook.mobi_parser.mobi.extract"
         ) as mock_extract:
-            mock_extract.side_effect = ValueError(
-                "Cannot process encrypted file"
-            )
+            mock_extract.side_effect = ValueError("Cannot process encrypted file")
             with pytest.raises(EbookError, match="DRM"):
                 parser.inspect(mobi_path)
 
@@ -617,10 +582,13 @@ class TestTempDirCleanup:
             captured_tempdir = tempdir
             return tempdir, "/nonexistent/file.html"
 
-        with patch(
-            "audiobook_engine.infrastructure.ebook.mobi_parser.mobi.extract",
-            side_effect=mock_extract,
-        ), pytest.raises(EbookError):
+        with (
+            patch(
+                "audiobook_engine.infrastructure.ebook.mobi_parser.mobi.extract",
+                side_effect=mock_extract,
+            ),
+            pytest.raises(EbookError),
+        ):
             parser.inspect(mobi_path)
 
         assert captured_tempdir is not None
@@ -667,3 +635,36 @@ class TestDeterminism:
         for c1, c2 in zip(book1.chapters, book2.chapters, strict=True):
             assert c1.title == c2.title
             assert len(c1.segments) == len(c2.segments)
+
+
+class TestSharedCoverParity:
+    def test_epub_cover_wrapper_unwrapped_via_mobi_parser(self, tmp_path: Path) -> None:
+        """MOBI/AZW3 path uses the shared cover logic (same XHTML handling)."""
+        from ebooklib import epub  # type: ignore[import-untyped]
+
+        from audiobook_engine.infrastructure.ebook.mobi_parser import (
+            MOBIParser,
+        )
+
+        book = epub.EpubBook()
+        book.set_identifier("mobi-cover")
+        book.set_title("Mobi Cover")
+        book.set_language("en")
+
+        wrapper = epub.EpubHtml(title="Cover", file_name="cover.xhtml", lang="en")
+        wrapper.id = "cover"
+        wrapper.set_content('<html><body><img src="art.jpg"/></body></html>')
+        book.add_item(wrapper)
+        book.add_item(
+            epub.EpubItem(
+                uid="img1",
+                file_name="art.jpg",
+                media_type="image/jpeg",
+                content=b"\xff\xd8\xff\xe0fakejpeg",
+            )
+        )
+
+        cover = MOBIParser._extract_epub_cover(book, tmp_path / "book.mobi")
+
+        assert cover is not None
+        assert cover.read_bytes() == b"\xff\xd8\xff\xe0fakejpeg"

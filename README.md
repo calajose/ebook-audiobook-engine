@@ -9,15 +9,15 @@ Developed in [OpenCode](https://opencode.ai) through human-guided orchestration 
 | Feature | Status | Notes |
 |---|---|---|
 | **EPUB → M4B** | ✅ Funcional | Chapters, metadata, cover image embedding via FFmpeg |
-| **TXT → M4B** | ✅ Funcional | Paragraph-aware parsing, auto fallback to WAV merger |
+| **TXT → M4B** | ✅ Funcional | Paragraph-aware parsing; WAV output via direct PCM merge |
 | **MOBI/AZW/AZW3 → M4B** | ✅ Funcional | Kindle ebook support via KindleUnpack (DRM-free only) |
 | **Kokoro TTS Backend** | ✅ Funcional | Multilingual ONNX local inference with auto model download |
 | **GPU Acceleration** | ✅ Funcional | NVIDIA CUDA and Intel GPU via ONNX Runtime EPs, auto device detection, CPU fallback |
-| **Prosody & Pauses** | ✅ Funcional | Configurable paragraph (700ms), chapter (2500ms), and scene break (1500ms) pauses |
+| **Prosody & Pauses** | ✅ Funcional | Configurable paragraph (700ms), chapter (2500ms), scene break (1500ms) and chapter title (1200ms) pauses |
 | **Dialogue & Interrogatives** | ✅ Mejorado | Natural phrasing: dialog tags kept with questions, em-dash normalization, acoustic tail padding |
-| **Chunking** | ✅ Determinado | Max 500 chars, sentence-boundary aware, abbreviation & Spanish punctuation handling |
+| **Chunking** | ✅ Determinado | Configurable `--max-chars` (default 500), sentence-boundary aware, abbreviation & Spanish punctuation handling |
 | **Assembly (WAV/M4B)** | ✅ Validado | Bit-perfect PCM pause insertion, FFmpeg concat demuxer for large audiobooks |
-| **Tests** | 304 passing | 100% test pass rate with strict typing and linting |
+| **Tests** | 347 passing | 100% test pass rate with strict typing and linting |
 
 ---
 
@@ -27,7 +27,8 @@ The engine provides fine-grained control over narration rhythm and acoustic flow
 
 - **Paragraph Pauses**: Natural breathing intervals between paragraphs (default: `700ms`).
 - **Chapter Pauses**: Extended silence between chapters (default: `2500ms`).
-- **Scene Break Pauses**: Narrative pause for section transitions and dividers (default: `1500ms`).
+- **Scene Break Pauses**: Audible pause where a section divider (`***`, `---`, `• • •`) appears (default: `1500ms`).
+- **Chapter Title Pauses**: Pause after a narrated chapter title, before its content (default: `1200ms`).
 - **Dialogue & Question Phrasing**:
   - Unbroken dialogue incises: Dialogue tags (e.g. *«—¿Por qué? —preguntó ella.»*) are kept in the same synthesis chunk to avoid abrupt cadence breaks.
   - Acoustic Tail Protection: Preserves rising pitch intonations and consonant decays on short interrogatives and exclamations without cutoff from silence trimming.
@@ -58,7 +59,6 @@ Converts ebooks (EPUB, TXT, MOBI, AZW, AZW3) into audiobooks (M4B/WAV) through a
 
 - **Standalone CLI** — convert books with rich progress bars and prosody flags
 - **Python API** — direct in-process use and programmatic pipeline integration
-- **Local HTTP service** — for Calibre and external clients (in development)
 
 ---
 
@@ -81,7 +81,6 @@ Or with specific extras:
 pip install -e ".[kokoro]"      # TTS backend
 pip install -e ".[openvino]"    # Intel GPU acceleration (optional)
 pip install -e ".[cuda]"        # NVIDIA GPU acceleration (optional)
-pip install -e ".[api]"         # HTTP service
 pip install -e ".[dev]"         # Testing/linting
 ```
 
@@ -207,6 +206,8 @@ audiobook-engine convert book.epub -v ef_dora -o book.m4b --device openvino
 | `--paragraph-pause` | | `700` | Pause duration between paragraphs in milliseconds |
 | `--chapter-pause` | | `2500` | Pause duration between chapters in milliseconds |
 | `--scene-break-pause` | | `1500` | Pause duration for scene breaks in milliseconds |
+| `--chapter-title-pause` | | `1200` | Pause duration after a narrated chapter title in milliseconds |
+| `--max-chars` | | `500` | Maximum characters per TTS chunk (also persisted in the job) |
 | `--chapters` | `-c` | None | Comma-separated chapter indices to convert (e.g. '0,2,5' or '1-3') |
 | `--work-dir` | `-w` | `work/` | Temporary directory for job artifacts and cache |
 | `--keep-intermediates` | | `False` | Keep intermediate WAV files after conversion (cleaned by default) |

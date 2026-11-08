@@ -2,11 +2,11 @@
 
 ## Objective
 
-Build a standalone multilingual audiobook engine usable through CLI, Python API and local HTTP service. Kokoro is the first TTS backend and EPUB the first ebook format.
+Build a standalone multilingual audiobook engine usable through CLI and Python API. Kokoro is the first TTS backend and EPUB the first ebook format.
 
 ## Principles
 
-- One conversion pipeline shared by CLI, Python and HTTP.
+- One conversion pipeline shared by CLI and Python API.
 - No Calibre dependency.
 - Standalone mode must not require a server.
 - Dynamic language/voice discovery.
@@ -120,7 +120,7 @@ resume
 cancel
 ```
 
-The CLI invokes application services directly and does not start or require the HTTP service.
+The CLI invokes application services directly.
 
 **Acceptance:** clean terminal conversion from EPUB to M4B.
 
@@ -129,25 +129,6 @@ The CLI invokes application services directly and does not start or require the 
 Expose a small documented API around application services.
 
 **Acceptance:** an external Python program can inspect and convert in-process.
-
-## Phase 10 — HTTP service
-
-Implement the local API:
-
-```text
-GET  /capabilities
-GET  /languages
-GET  /voices
-POST /books/inspect
-POST /jobs
-GET  /jobs/{id}
-POST /jobs/{id}/resume
-POST /jobs/{id}/cancel
-```
-
-Use structured JSON responses/errors and localhost by default.
-
-**Acceptance:** external client can perform a complete conversion through HTTP.
 
 ## Phase 11 — End-to-end hardening
 
@@ -159,15 +140,14 @@ Add an AZW3 parser that maps to the same `Book` model. Reuse the entire downstre
 
 ## Phase 13 — Release
 
-Document installation, CLI, Python API and HTTP API. Add configuration, error codes, packaging and performance checks.
+Document installation, CLI and Python API. Add configuration, error codes, packaging and performance checks.
 
 ## Definition of Done
 
 - [ ] EPUB converts successfully in standalone mode.
 - [ ] CLI needs no server.
 - [ ] Python API works in-process.
-- [ ] HTTP service works independently.
-- [ ] All three share the same application pipeline.
+- [ ] CLI and Python API share the same application pipeline.
 - [ ] Languages and voices are dynamic.
 - [ ] Kokoro is isolated.
 - [ ] Jobs are resumable.
@@ -189,9 +169,8 @@ Domain/contracts
   -> M4B
   -> CLI
   -> Python API
-  -> HTTP API
   -> E2E hardening
   -> AZW3
 ```
 
-The standalone engine must be useful before Calibre integration begins.
+The standalone engine must be useful through the CLI and the Python API.

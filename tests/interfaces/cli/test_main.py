@@ -12,6 +12,7 @@ from audiobook_engine.interfaces.cli.main import app
 
 if TYPE_CHECKING:
     from pathlib import Path
+
     pass
 
 runner = CliRunner()
@@ -19,9 +20,7 @@ runner = CliRunner()
 
 class TestConvertCommand:
     def test_missing_file_shows_error(self) -> None:
-        result = runner.invoke(
-            app, ["convert", "nonexistent.epub", "-v", "af_heart"]
-        )
+        result = runner.invoke(app, ["convert", "nonexistent.epub", "-v", "af_heart"])
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
 
@@ -64,6 +63,8 @@ class TestConvertCommand:
                 str(epub),
                 "-v",
                 "af_heart",
+                "-l",
+                "en-us",
                 "-o",
                 str(tmp_path / "out.m4b"),
                 "--speed",
@@ -85,9 +86,7 @@ class TestConvertCommand:
 
 class TestListVoicesCommand:
     @patch("audiobook_engine.interfaces.cli.main.AudiobookEngine")
-    def test_list_voices_shows_table(
-        self, mock_engine_cls: MagicMock
-    ) -> None:
+    def test_list_voices_shows_table(self, mock_engine_cls: MagicMock) -> None:
         mock_engine = mock_engine_cls.return_value
         mock_caps = MagicMock()
         mock_lang = MagicMock()
@@ -106,9 +105,7 @@ class TestListVoicesCommand:
         assert "af_heart" in result.output
 
     @patch("audiobook_engine.interfaces.cli.main.AudiobookEngine")
-    def test_list_voices_filter_by_language(
-        self, mock_engine_cls: MagicMock
-    ) -> None:
+    def test_list_voices_filter_by_language(self, mock_engine_cls: MagicMock) -> None:
         mock_engine = mock_engine_cls.return_value
         mock_caps = MagicMock()
         mock_lang_en = MagicMock()
@@ -208,3 +205,185 @@ class TestCleanCommand:
         result = runner.invoke(app, ["clean", "--work-dir", str(work), "no-such-job"])
         assert result.exit_code == 0
         assert "not found" in result.output
+
+
+def _mock_convert_engine(
+    mock_create: MagicMock,
+    *,
+    completed: bool = True,
+    total_segments: int = 10,
+) -> tuple[MagicMock, MagicMock]:
+    """Configure a mocked engine for convert validation tests."""
+    engine = mock_create.return_value
+    book = MagicMock()
+    book.title = "Test Book"
+    book.author = "Author"
+    book.chapters = [MagicMock(index=0), MagicMock(index=1)]
+    engine.inspect.return_value = book
+
+    caps = MagicMock()
+    lang = MagicMock(code="en-us")
+    voice = MagicMock()
+    voice.id = "af_heart"
+    voice.language_code = "en-us"
+    caps.languages = [lang]
+    caps.voices = [voice]
+    engine.capabilities.return_value = caps
+
+    job = MagicMock()
+    job.id = "job123"
+    job.state = JobState.COMPLETED if completed else JobState.FAILED
+    job.completed_segments = total_segments
+    job.total_segments = total_segments
+    job.error_message = None
+    engine.create_job.return_value = job
+    engine.get_job.return_value = job
+    return engine, job
+
+
+class TestConvertValidation:
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_out_of_range_chapters_rejected(
+        self, mock_create: MagicMock, tmp_path: Path
+    ) -> None:
+        epub = tmp_path / "book.epub"
+        epub.write_text("fake")
+        engine, _ = _mock_convert_engine(mock_create)
+
+        result = runner.invoke(
+            app,
+            ["convert", str(epub), "-v", "af_heart", "-l", "en-us", "-c", "99"],
+        )
+
+        assert result.exit_code == 1
+        assert "out of range" in result.output.lower()
+        engine.create_job.assert_not_called()
+
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_empty_chapter_selection_rejected(
+        self, mock_create: MagicMock, tmp_path: Path
+    ) -> None:
+        epub = tmp_path / "book.epub"
+        epub.write_text("fake")
+        engine, _ = _mock_convert_engine(mock_create)
+
+        result = runner.invoke(
+            app,
+            ["convert", str(epub), "-v", "af_heart", "-l", "en-us", "-c", "3-1"],
+        )
+
+        assert result.exit_code == 1
+        assert "empty" in result.output.lower()
+        engine.create_job.assert_not_called()
+
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_unsupported_output_extension_rejected(
+        self, mock_create: MagicMock, tmp_path: Path
+    ) -> None:
+        epub = tmp_path / "book.epub"
+        epub.write_text("fake")
+        engine, _ = _mock_convert_engine(mock_create)
+
+        result = runner.invoke(
+            app,
+            [
+                "convert",
+                str(epub),
+                "-v",
+                "af_heart",
+                "-l",
+                "en-us",
+                "-o",
+                str(tmp_path / "out.mp3"),
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "unsupported output extension" in result.output.lower()
+        engine.create_job.assert_not_called()
+
+    @patch(
+        "audiobook_engine.interfaces.cli.main.ffmpeg.is_available",
+        return_value=False,
+    )
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_m4b_without_ffmpeg_rejected(
+        self,
+        mock_create: MagicMock,
+        mock_ffmpeg: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        epub = tmp_path / "book.epub"
+        epub.write_text("fake")
+        engine, _ = _mock_convert_engine(mock_create)
+
+        result = runner.invoke(
+            app,
+            [
+                "convert",
+                str(epub),
+                "-v",
+                "af_heart",
+                "-l",
+                "en-us",
+                "-o",
+                str(tmp_path / "out.m4b"),
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "requires ffmpeg" in result.output.lower()
+        engine.create_job.assert_not_called()
+
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_max_chars_forwarded_to_create_job(
+        self, mock_create: MagicMock, tmp_path: Path
+    ) -> None:
+        epub = tmp_path / "book.epub"
+        epub.write_text("fake")
+        engine, _ = _mock_convert_engine(mock_create)
+
+        runner.invoke(
+            app,
+            [
+                "convert",
+                str(epub),
+                "-v",
+                "af_heart",
+                "-l",
+                "en-us",
+                "-o",
+                str(tmp_path / "out.wav"),
+                "--max-chars",
+                "120",
+            ],
+        )
+
+        kwargs = engine.create_job.call_args[1]
+        assert kwargs["max_chars"] == 120
+
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_warns_when_no_audible_content(
+        self, mock_create: MagicMock, tmp_path: Path
+    ) -> None:
+        epub = tmp_path / "book.epub"
+        epub.write_text("fake")
+        _, job = _mock_convert_engine(mock_create, total_segments=0)
+        job.total_segments = 0
+
+        result = runner.invoke(
+            app,
+            [
+                "convert",
+                str(epub),
+                "-v",
+                "af_heart",
+                "-l",
+                "en-us",
+                "-o",
+                str(tmp_path / "out.wav"),
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "no audible content" in result.output.lower()

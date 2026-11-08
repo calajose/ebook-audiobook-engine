@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, is_protocol
 
 import pytest
-from typing_extensions import is_protocol
 
 from audiobook_engine.domain.exceptions import (
     AudioAssemblyError,

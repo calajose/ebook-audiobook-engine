@@ -14,6 +14,7 @@ from ebooklib import epub
 
 from audiobook_engine.domain.exceptions import EbookError
 from audiobook_engine.domain.models import Book, Chapter, TextSegment
+from audiobook_engine.infrastructure.ebook.cover import extract_cover
 
 _SUPPORTED_EXTENSIONS = frozenset({".mobi", ".azw", ".azw3"})
 
@@ -49,21 +50,13 @@ class MOBIParser:
             # mobi.extract raises ValueError for DRM-protected files
             msg = str(exc).lower()
             if "drm" in msg or "encrypt" in msg or "crypto" in msg:
-                raise EbookError(
-                    f"DRM-protected file not supported: {path}"
-                ) from exc
-            raise EbookError(
-                f"Failed to extract MOBI file: {exc}"
-            ) from exc
+                raise EbookError(f"DRM-protected file not supported: {path}") from exc
+            raise EbookError(f"Failed to extract MOBI file: {exc}") from exc
         except Exception as exc:
             msg = str(exc).lower()
             if "drm" in msg or "encrypt" in msg or "crypto" in msg:
-                raise EbookError(
-                    f"DRM-protected file not supported: {path}"
-                ) from exc
-            raise EbookError(
-                f"Failed to parse MOBI file: {exc}"
-            ) from exc
+                raise EbookError(f"DRM-protected file not supported: {path}") from exc
+            raise EbookError(f"Failed to parse MOBI file: {exc}") from exc
         finally:
             if tempdir is not None:
                 shutil.rmtree(tempdir, ignore_errors=True)
@@ -77,9 +70,7 @@ class MOBIParser:
         if not path.exists():
             raise EbookError(f"File not found: {path}")
         if path.suffix.lower() not in _SUPPORTED_EXTENSIONS:
-            raise EbookError(
-                f"Not a MOBI/AZW/AZW3 file: {path}"
-            )
+            raise EbookError(f"Not a MOBI/AZW/AZW3 file: {path}")
 
     # ------------------------------------------------------------------
     # Extraction
@@ -95,16 +86,12 @@ class MOBIParser:
     # EPUB parsing (for AZW3/KF8 files)
     # ------------------------------------------------------------------
 
-    def _parse_epub(
-        self, epub_path: Path, source_path: Path
-    ) -> Book:
+    def _parse_epub(self, epub_path: Path, source_path: Path) -> Book:
         """Parse an extracted EPUB file (from AZW3/KF8)."""
         try:
             book = epub.read_epub(str(epub_path))
         except Exception as exc:
-            raise EbookError(
-                f"Failed to parse extracted EPUB: {exc}"
-            ) from exc
+            raise EbookError(f"Failed to parse extracted EPUB: {exc}") from exc
 
         title = self._extract_epub_title(book) or source_path.stem
         author = self._extract_epub_author(book)
@@ -143,64 +130,13 @@ class MOBIParser:
         return "en"
 
     @staticmethod
-    def _extract_epub_cover(
-        book: epub.EpubBook, source_path: Path
-    ) -> Path | None:
-        for item in book.get_items():
-            if isinstance(item, epub.EpubCover):
-                content = item.get_content()
-                if content:
-                    suffix = Path(item.get_name()).suffix or ".jpg"
-                    out = (
-                        source_path.parent
-                        / f"{source_path.stem}_cover{suffix}"
-                    )
-                    out.write_bytes(content)
-                    return out
+    def _extract_epub_cover(book: epub.EpubBook, source_path: Path) -> Path | None:
+        """Extract the cover through the shared EPUB/MOBI logic (A-08)."""
+        return extract_cover(book, source_path)
 
-        opf_ns = "http://www.idpf.org/2007/opf"
-        meta_entries = book.metadata.get(opf_ns, {}).get("meta", [])
-        for _val, others in meta_entries:
-            if others and others.get("name") == "cover":
-                cover_id = others.get("content", "")
-                if cover_id:
-                    item = book.get_item_with_id(cover_id)
-                    if item is not None:
-                        content = item.get_content()
-                        if content:
-                            suffix = (
-                                Path(item.get_name()).suffix or ".jpg"
-                            )
-                            out = (
-                                source_path.parent
-                                / f"{source_path.stem}_cover{suffix}"
-                            )
-                            out.write_bytes(content)
-                            return out
-
-        item = book.get_item_with_id("cover")
-        if item is not None:
-            content = item.get_content()
-            if content:
-                suffix = Path(item.get_name()).suffix or ".jpg"
-                out = (
-                    source_path.parent
-                    / f"{source_path.stem}_cover{suffix}"
-                )
-                out.write_bytes(content)
-                return out
-
-        return None
-
-    def _extract_epub_chapters(
-        self, book: epub.EpubBook
-    ) -> tuple[Chapter, ...]:
+    def _extract_epub_chapters(self, book: epub.EpubBook) -> tuple[Chapter, ...]:
         skip_ids = {"nav", "ncx"}
-        spine_ids = [
-            item_id
-            for item_id, _ in book.spine
-            if item_id not in skip_ids
-        ]
+        spine_ids = [item_id for item_id, _ in book.spine if item_id not in skip_ids]
         spine_items = {
             item.get_id(): item
             for item in book.get_items()
@@ -215,13 +151,9 @@ class MOBIParser:
             if item is None:
                 continue
 
-            content = item.get_content().decode(
-                "utf-8", errors="replace"
-            )
+            content = item.get_content().decode("utf-8", errors="replace")
             heading = self._extract_heading(content)
-            segments, seg_index = self._extract_segments(
-                content, seg_index
-            )
+            segments, seg_index = self._extract_segments(content, seg_index)
 
             if segments:
                 chapters.append(
@@ -239,18 +171,12 @@ class MOBIParser:
     # HTML parsing (for MOBI v7/AZW files)
     # ------------------------------------------------------------------
 
-    def _parse_html(
-        self, html_path: Path, source_path: Path
-    ) -> Book:
+    def _parse_html(self, html_path: Path, source_path: Path) -> Book:
         """Parse an extracted HTML file (from MOBI v7/AZW)."""
         try:
-            content = html_path.read_text(
-                encoding="utf-8", errors="replace"
-            )
+            content = html_path.read_text(encoding="utf-8", errors="replace")
         except Exception as exc:
-            raise EbookError(
-                f"Failed to read extracted HTML: {exc}"
-            ) from exc
+            raise EbookError(f"Failed to read extracted HTML: {exc}") from exc
 
         # Try to read metadata from content.opf (sibling of HTML)
         opf_path = html_path.parent / "content.opf"
@@ -300,9 +226,7 @@ class MOBIParser:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _extract_html_cover(
-        content_dir: Path, source_path: Path
-    ) -> Path | None:
+    def _extract_html_cover(content_dir: Path, source_path: Path) -> Path | None:
         """Extract cover image from OPF metadata for HTML-path MOBI."""
         opf_path = content_dir / "content.opf"
         if not opf_path.exists():
@@ -450,9 +374,7 @@ class MOBIParser:
         matches = list(heading_pattern.finditer(html_content))
 
         if matches:
-            return self._split_html_by_headings(
-                html_content, matches
-            )
+            return self._split_html_by_headings(html_content, matches)
 
         # Strategy 3: Single chapter fallback
         segments = self._html_to_segments(html_content, 0)
@@ -494,23 +416,23 @@ class MOBIParser:
 
             # End is the next anchor or end of content
             if idx + 1 < len(ncx_entries):
-                next_anchor_id = f'filepos{ncx_entries[idx + 1][1]}'
+                next_anchor_id = f"filepos{ncx_entries[idx + 1][1]}"
                 next_pos = html_content.find(f'id="{next_anchor_id}"')
                 if next_pos < 0:
                     next_pos = html_content.find(f"id='{next_anchor_id}'")
                 if next_pos >= 0:
                     end = html_content.rfind("<", 0, next_pos)
                 else:
-                    end = html_content.find(f"filepos{ncx_entries[idx + 1][1]}", start + 1)
+                    end = html_content.find(
+                        f"filepos{ncx_entries[idx + 1][1]}", start + 1
+                    )
                     if end < 0:
                         end = len(html_content)
             else:
                 end = len(html_content)
 
             section_html = html_content[start:end]
-            segments, seg_index = self._extract_segments(
-                section_html, seg_index
-            )
+            segments, seg_index = self._extract_segments(section_html, seg_index)
 
             if segments:
                 chapters.append(
@@ -533,9 +455,7 @@ class MOBIParser:
         seg_index = 0
 
         for idx, match in enumerate(matches):
-            heading = re.sub(
-                r"<[^>]+>", "", match.group(2)
-            ).strip()
+            heading = re.sub(r"<[^>]+>", "", match.group(2)).strip()
 
             start = match.end()
             next_start = (
@@ -545,9 +465,7 @@ class MOBIParser:
             )
             section_html = html_content[start:next_start]
 
-            segments, seg_index = self._extract_segments(
-                section_html, seg_index
-            )
+            segments, seg_index = self._extract_segments(section_html, seg_index)
 
             if segments:
                 chapters.append(
@@ -618,9 +536,7 @@ class MOBIParser:
         if not normalized:
             return (), start_index
 
-        paragraphs = [
-            p for p in normalized.split("\n") if p.strip()
-        ]
+        paragraphs = [p for p in normalized.split("\n") if p.strip()]
 
         segments = tuple(
             TextSegment(text=para, index=start_index + i)

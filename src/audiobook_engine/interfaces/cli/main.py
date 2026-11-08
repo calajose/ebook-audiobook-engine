@@ -34,6 +34,7 @@ from audiobook_engine.domain.exceptions import (
     TTSBackendError,
 )
 from audiobook_engine.domain.job import JobState
+from audiobook_engine.infrastructure.audio import ffmpeg
 from audiobook_engine.infrastructure.ebook.epub_parser import EPUBParser
 from audiobook_engine.infrastructure.ebook.mobi_parser import MOBIParser
 from audiobook_engine.infrastructure.ebook.txt_parser import TXTParser
@@ -74,8 +75,7 @@ def _get_parser(source: Path) -> EbookParser:
         return MOBIParser()
     else:
         raise EbookError(
-            f"Unsupported format: {ext}. "
-            f"Supported: .epub, .txt, .mobi, .azw, .azw3"
+            f"Unsupported format: {ext}. Supported: .epub, .txt, .mobi, .azw, .azw3"
         )
 
 
@@ -158,9 +158,7 @@ def convert(
     language: str = typer.Option(
         "en", "--language", "-l", help="Target language code."
     ),
-    voice: str = typer.Option(
-        ..., "--voice", "-v", help="Voice identifier."
-    ),
+    voice: str = typer.Option(..., "--voice", "-v", help="Voice identifier."),
     speed: float = typer.Option(
         1.0, "--speed", "-s", help="Speech speed multiplier (0.5 to 2.0)."
     ),
@@ -178,6 +176,16 @@ def convert(
         1500,
         "--scene-break-pause",
         help="Pause for scene breaks in milliseconds (default: 1500).",
+    ),
+    chapter_title_pause: int = typer.Option(
+        1200,
+        "--chapter-title-pause",
+        help="Pause after a narrated chapter title in milliseconds (default: 1200).",
+    ),
+    max_chars: int = typer.Option(
+        500,
+        "--max-chars",
+        help="Max characters per TTS chunk (default: 500).",
     ),
     work_dir: str | None = typer.Option(
         None, "--work-dir", "-w", help="Working directory for temp files."
@@ -226,19 +234,51 @@ def convert(
     with console.status("[bold green]Inspecting ebook..."):
         book_data = engine.inspect(source)
 
-    console.print(
-        f"[bold]Book:[/bold] {book_data.title} "
-        f"by {book_data.author}"
-    )
-    console.print(
-        f"[bold]Chapters:[/bold] {len(book_data.chapters)}"
-    )
+    console.print(f"[bold]Book:[/bold] {book_data.title} by {book_data.author}")
+    console.print(f"[bold]Chapters:[/bold] {len(book_data.chapters)}")
 
     try:
         chapter_indices = _parse_chapter_indices(chapters) if chapters else None
     except ValueError:
         console.print("[red]Error:[/red] Invalid chapter specification.")
         raise typer.Exit(1) from None
+
+    # Early semantic validation (BD-2026-10-12-07): fail before creating
+    # a job when the selection or the output format cannot work.
+    if chapter_indices is not None:
+        available = {ch.index for ch in book_data.chapters}
+        missing = [index for index in chapter_indices if index not in available]
+        if not chapter_indices:
+            console.print(
+                "[red]Error:[/red] Chapter selection is empty. "
+                f"Available indices: {_format_chapter_range(available)}"
+            )
+            raise typer.Exit(1)
+        if missing:
+            console.print(
+                "[red]Error:[/red] Chapter indices out of range: "
+                f"{', '.join(str(i) for i in missing)}. "
+                f"Available indices: {_format_chapter_range(available)}"
+            )
+            raise typer.Exit(1)
+
+    output_suffix = Path(output).suffix.lower()
+    if output_suffix not in (".m4b", ".wav"):
+        console.print(
+            "[red]Error:[/red] Unsupported output extension "
+            f"'{output_suffix or '(none)'}'. Use .m4b or .wav."
+        )
+        raise typer.Exit(1)
+    if output_suffix == ".m4b" and not ffmpeg.is_available():
+        console.print(
+            "[red]Error:[/red] .m4b output requires FFmpeg, "
+            "which is not installed or not on PATH. "
+            "Use .wav or install FFmpeg."
+        )
+        raise typer.Exit(1)
+    if max_chars <= 0:
+        console.print("[red]Error:[/red] --max-chars must be a positive integer.")
+        raise typer.Exit(1)
 
     if chapter_indices:
         console.print(f"[bold]Selected chapters:[/bold] {chapters}")
@@ -254,6 +294,8 @@ def convert(
                 paragraph_pause_ms=paragraph_pause,
                 chapter_pause_ms=chapter_pause,
                 scene_break_pause_ms=scene_break_pause,
+                chapter_title_pause_ms=chapter_title_pause,
+                max_chars=max_chars,
                 chapter_indices=chapter_indices,
                 keep_intermediates=keep_intermediates,
             )
@@ -277,16 +319,11 @@ def convert(
                 job.language = language
 
             valid_voice = any(
-                v.id == voice
-                for v in caps.voices
-                if v.language_code == language
+                v.id == voice for v in caps.voices if v.language_code == language
             )
             if not valid_voice:
                 # Try any voice for the language
-                lang_voices = [
-                    v for v in caps.voices
-                    if v.language_code == language
-                ]
+                lang_voices = [v for v in caps.voices if v.language_code == language]
                 if lang_voices:
                     console.print(
                         f"[yellow]Voice '{voice}' not found. "
@@ -295,8 +332,7 @@ def convert(
                     job.voice = lang_voices[0].id
                 else:
                     console.print(
-                        f"[red]Error:[/red] No voices for "
-                        f"language '{language}'"
+                        f"[red]Error:[/red] No voices for language '{language}'"
                     )
                     raise typer.Exit(1)
     except TTSBackendError as exc:
@@ -322,27 +358,27 @@ def convert(
         _display_progress(job.id, engine, run_thread)
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted. Job saved.[/yellow]")
-        console.print(
-            f"[dim]Resume with: audiobook-engine resume {job.id}[/dim]"
-        )
+        console.print(f"[dim]Resume with: audiobook-engine resume {job.id}[/dim]")
         raise typer.Exit(0) from None
 
     # Check for errors from the run thread
-    if run_error is not None:
-        console.print(f"\n[red]Error:[/red] {run_error}")
-        raise typer.Exit(1) from None
-
     final_job = engine.get_job(job.id)
 
+    if run_error is not None:
+        message = final_job.error_message or str(run_error)
+        console.print(f"\n[red]Error:[/red] {message}")
+        raise typer.Exit(1) from None
+
     if final_job.state == JobState.COMPLETED:
-        console.print(
-            f"\n[bold green]Done![/bold green] "
-            f"Output: {output}"
-        )
+        console.print(f"\n[bold green]Done![/bold green] Output: {output}")
+        if final_job.total_segments == 0 or not Path(output).exists():
+            console.print(
+                "[yellow]Warning:[/yellow] No audible content was "
+                "generated (the book or the selected chapters produced "
+                "0 narrated fragments)."
+            )
     else:
-        console.print(
-            f"\n[red]Failed:[/red] {final_job.error_message}"
-        )
+        console.print(f"\n[red]Failed:[/red] {final_job.error_message}")
         raise typer.Exit(1)
 
 
@@ -364,9 +400,7 @@ def capabilities(
         caps = engine.capabilities()
         langs = ", ".join(lang.code for lang in caps.languages)
         console.print(f"[bold]Languages:[/bold] {langs}")
-        console.print(
-            f"[bold]Total voices:[/bold] {len(caps.voices)}"
-        )
+        console.print(f"[bold]Total voices:[/bold] {len(caps.voices)}")
     except TTSBackendError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from None
@@ -385,6 +419,14 @@ def _parse_chapter_indices(spec: str) -> list[int]:
         else:
             indices.append(int(part))
     return sorted(set(indices))
+
+
+def _format_chapter_range(indices: set[int]) -> str:
+    """Format the available chapter indices for validation messages."""
+    if not indices:
+        return "(none)"
+    ordered = sorted(indices)
+    return f"{ordered[0]}-{ordered[-1]}"
 
 
 @app.command()
@@ -445,9 +487,7 @@ def inspect(
         and getattr(book_data.cover_path, "exists", lambda: True)()
     )
     if has_cover and book_data.cover_path is not None:
-        cover_name = getattr(
-            book_data.cover_path, "name", str(book_data.cover_path)
-        )
+        cover_name = getattr(book_data.cover_path, "name", str(book_data.cover_path))
         console.print(f"[bold]Cover:[/bold] {cover_name}")
     else:
         console.print("[bold]Cover:[/bold] None")
@@ -529,6 +569,7 @@ def status(
         work = Path(work_dir or "work") / "jobs" / job_id
         if work.exists():
             from audiobook_engine.infrastructure.persistence.job_store import load_job
+
             job = load_job(work)
             engine._jobs[job.id] = job
 
@@ -542,8 +583,7 @@ def status(
             f"segments ({progress:.1f}%)"
         )
         console.print(
-            f"[bold]Created:[/bold] "
-            f"{job.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
+            f"[bold]Created:[/bold] {job.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
         )
     except JobError as exc:
         console.print(f"[red]Error:[/red] {exc}")
@@ -564,6 +604,7 @@ def cancel(
         work = Path(work_dir or "work") / "jobs" / job_id
         if work.exists():
             from audiobook_engine.infrastructure.persistence.job_store import load_job
+
             job = load_job(work)
             engine._jobs[job.id] = job
 
@@ -611,10 +652,7 @@ def reassemble(
 
         new_output = Path(output) if output else None
         job = engine.reassemble(job_id, new_output)
-        console.print(
-            f"[bold green]Done![/bold green] "
-            f"Output: {job.output_path}"
-        )
+        console.print(f"[bold green]Done![/bold green] Output: {job.output_path}")
     except JobError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from None
@@ -705,10 +743,7 @@ def resume(
             title = job.book_title or "—"
             total = job.total_segments or 1
             pct = job.completed_segments / total * 100
-            progress_str = (
-                f"{job.completed_segments}/{job.total_segments} "
-                f"({pct:.1f}%)"
-            )
+            progress_str = f"{job.completed_segments}/{job.total_segments} ({pct:.1f}%)"
             created_str = job.created_at.strftime("%Y-%m-%d %H:%M:%S")
 
             state_style = "yellow"
@@ -730,9 +765,7 @@ def resume(
             )
 
         console.print(table)
-        console.print(
-            "\n[dim]Resume with: audiobook-engine resume <job-id>[/dim]"
-        )
+        console.print("\n[dim]Resume with: audiobook-engine resume <job-id>[/dim]")
         return
 
     try:
@@ -764,10 +797,7 @@ def resume(
         )
         raise typer.Exit(1)
 
-    console.print(
-        f"[bold]Resuming job:[/bold] {job.id} "
-        f"({job.state.value})"
-    )
+    console.print(f"[bold]Resuming job:[/bold] {job.id} ({job.state.value})")
 
     # Run engine in background thread
     run_error: Exception | None = None
@@ -786,9 +816,7 @@ def resume(
         _display_progress(job.id, engine, run_thread)
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted. Job saved.[/yellow]")
-        console.print(
-            f"[dim]Resume with: audiobook-engine resume {job.id}[/dim]"
-        )
+        console.print(f"[dim]Resume with: audiobook-engine resume {job.id}[/dim]")
         raise typer.Exit(0) from None
 
     # Check for errors from the run thread

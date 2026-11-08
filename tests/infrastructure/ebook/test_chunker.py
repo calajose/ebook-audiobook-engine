@@ -49,7 +49,6 @@ class TestSplitSentences:
         assert len(result) == 1
 
 
-
 class TestChunkText:
     def test_short_text_single_chunk(self) -> None:
         text = "Short text."
@@ -103,3 +102,32 @@ class TestChunkText:
         # All original words should be present
         for word in text.split():
             assert word in combined
+
+
+class TestProsodyMarkers:
+    def test_markers_are_standalone_chunks(self) -> None:
+        from audiobook_engine.infrastructure.ebook.normalizer import (
+            SCENE_BREAK_MARKER,
+        )
+
+        text = f"Antes del corte.\n{SCENE_BREAK_MARKER}\nDespués del corte."
+        chunks = chunk_text(text)
+        assert SCENE_BREAK_MARKER in chunks
+        assert chunks.index(SCENE_BREAK_MARKER) == 1
+        assert "Antes del corte." in chunks[0]
+        assert "Después del corte." in chunks[2]
+
+    def test_marker_never_merged_with_text(self) -> None:
+        from audiobook_engine.infrastructure.ebook.normalizer import (
+            CHAPTER_TITLE_MARKER,
+        )
+
+        text = f"Título\n{CHAPTER_TITLE_MARKER}\nCuerpo del capítulo."
+        chunks = chunk_text(text, max_chars=500)
+        for chunk in chunks:
+            if CHAPTER_TITLE_MARKER in chunk:
+                assert chunk == CHAPTER_TITLE_MARKER
+
+    def test_no_markers_keeps_previous_behavior(self) -> None:
+        text = "First sentence. Second sentence."
+        assert chunk_text(text) == ["First sentence. Second sentence."]
