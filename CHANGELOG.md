@@ -7,10 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] - 2026-11-08
+## [0.7.0] - 2026-11-10
 
 ### Fixed
-- **Business-requested anomaly corrections (SPEC-013)**:
+- **Elimination of anomalies detected during SDD application**:
   - `--scene-break-pause` (1500 ms) and `--chapter-title-pause` (1200 ms) now produce real audible pauses: section separators (`***`, `---`, `• • •`) and narrated chapter titles are detected before noise removal and turned into silence at the configured positions.
   - `--max-chars` is now persisted in the job and drives the real synthesis; `inspect` and `convert` no longer diverge.
   - `resume` now accepts jobs interrupted in `created` and `ready`, not only `synthesizing`/`assembling`.

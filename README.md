@@ -1,6 +1,6 @@
 # ebook-audiobook-engine
 
-> **Version: v0.6.0** — Local audiobook conversion engine with configurable prosody, smart dialogue chunking, GPU acceleration via NVIDIA CUDA and Intel OpenVINO, and pluggable TTS backends.
+> **Version: v0.7.0** — Local audiobook conversion engine with configurable prosody, smart dialogue chunking, GPU acceleration via NVIDIA CUDA and Intel OpenVINO, and pluggable TTS backends.
 
 Developed in [OpenCode](https://opencode.ai) through human-guided orchestration of Mimo V2.5, Gemini 3.5 Flash Lite, Gemini 3.7 Flash, Gemini 3.1 Pro, and minor assistance from auxiliary models.
 
