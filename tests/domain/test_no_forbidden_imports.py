@@ -15,6 +15,7 @@ DOMAIN_DIR = (
 
 FORBIDDEN_PREFIXES = (
     "kokoro",
+    "ptts",
     "ffmpeg",
     "fastapi",
     "uvicorn",

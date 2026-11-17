@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import sys
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
+from audiobook_engine.domain.exceptions import TTSBackendError
 from audiobook_engine.domain.job import JobState
-from audiobook_engine.interfaces.cli.main import app
+from audiobook_engine.interfaces.cli.main import app, normalize_backend_name
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -387,3 +391,434 @@ class TestConvertValidation:
 
         assert result.exit_code == 0
         assert "no audible content" in result.output.lower()
+
+
+class _SysProxy:
+    """Proxy around the ``sys`` module with a controllable stdin."""
+
+    def __init__(self, real: Any, stdin: Any) -> None:
+        self._real = real
+        self.stdin = stdin
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+class TestBackendSelection:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("kokoro", "kokoro"),
+            ("Kokoro", "kokoro"),
+            ("phonon", "phonon"),
+            ("phonom", "phonon"),
+            ("PHONOM", "phonon"),
+            ("phonon-40m", "phonon"),
+            ("phonom-40m", "phonon"),
+        ],
+    )
+    def test_normalize_backend_name(self, raw: str, expected: str) -> None:
+        assert normalize_backend_name(raw) == expected
+
+    def test_normalize_backend_name_rejects_unknown(self) -> None:
+        with pytest.raises(TTSBackendError) as excinfo:
+            normalize_backend_name("piper")
+        assert "kokoro" in str(excinfo.value)
+        assert "phonon" in str(excinfo.value)
+
+    def test_explicit_option_detection_survives_foreign_enum(self) -> None:
+        """Typer may vendor Click, so parameter sources come from another
+        ``ParameterSource`` class than the standalone ``click`` package."""
+        import enum
+
+        from audiobook_engine.interfaces.cli.main import _was_explicitly_given
+
+        class ForeignSource(enum.Enum):
+            COMMANDLINE = 1
+            DEFAULT = 5
+
+        class FakeCtx:
+            def __init__(self, source: object) -> None:
+                self._source = source
+
+            def get_parameter_source(self, name: str) -> object:
+                return self._source
+
+        assert _was_explicitly_given(FakeCtx(ForeignSource.COMMANDLINE), "language")
+        assert not _was_explicitly_given(FakeCtx(ForeignSource.DEFAULT), "language")
+        assert not _was_explicitly_given(FakeCtx(None), "language")
+
+
+def _mock_phonon_engine(
+    mock_create: MagicMock,
+    *,
+    book_language: str = "es",
+    caps_error: Exception | None = None,
+) -> MagicMock:
+    """Configure a mocked engine for the Phonon 40M CLI paths."""
+    from audiobook_engine.domain.models import (
+        BackendCapabilities,
+        Language,
+        Voice,
+    )
+
+    engine: MagicMock = mock_create.return_value
+    book = MagicMock()
+    book.title = "Libro"
+    book.author = "Autor"
+    book.language = book_language
+    book.chapters = [MagicMock(index=0)]
+    engine.inspect.return_value = book
+
+    if caps_error is not None:
+        engine.capabilities.side_effect = caps_error
+    else:
+        engine.capabilities.return_value = BackendCapabilities(
+            languages=(Language(code="es", name="Spanish"),),
+            voices=(Voice(id="default", name="default", language_code="es"),),
+        )
+
+    job = MagicMock()
+    job.id = "job1"
+    job.state = JobState.COMPLETED
+    job.completed_segments = 1
+    job.total_segments = 1
+    job.error_message = None
+    engine.create_job.return_value = job
+    engine.get_job.return_value = job
+    return engine
+
+
+class TestConvertBackendSelection:
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_phonon_uses_explicit_language(
+        self, mock_create: MagicMock, tmp_path: Path
+    ) -> None:
+        epub = tmp_path / "book.epub"
+        epub.write_text("fake")
+        engine = _mock_phonon_engine(mock_create)
+
+        result = runner.invoke(
+            app,
+            [
+                "convert",
+                str(epub),
+                "-v",
+                "default",
+                "-l",
+                "es",
+                "-o",
+                str(tmp_path / "out.wav"),
+                "--backend",
+                "phonon",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert mock_create.call_args[1]["backend"] == "phonon"
+        assert mock_create.call_args[1]["language"] == "es"
+        kwargs = engine.create_job.call_args[1]
+        assert kwargs["language"] == "es"
+
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_phonom_alias_infers_language_from_book(
+        self, mock_create: MagicMock, tmp_path: Path
+    ) -> None:
+        epub = tmp_path / "book.epub"
+        epub.write_text("fake")
+        engine = _mock_phonon_engine(mock_create, book_language="es-ES")
+
+        result = runner.invoke(
+            app,
+            [
+                "convert",
+                str(epub),
+                "-v",
+                "default",
+                "-o",
+                str(tmp_path / "out.wav"),
+                "--backend",
+                "phonom",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert mock_create.call_args[1]["backend"] == "phonon"
+        assert mock_create.call_args[1]["language"] == "es"
+        assert engine.create_job.call_args[1]["language"] == "es"
+
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_phonon_unsupported_language_rejected(
+        self, mock_create: MagicMock, tmp_path: Path
+    ) -> None:
+        epub = tmp_path / "book.epub"
+        epub.write_text("fake")
+        engine = _mock_phonon_engine(mock_create)
+
+        result = runner.invoke(
+            app,
+            [
+                "convert",
+                str(epub),
+                "-v",
+                "default",
+                "-l",
+                "ja",
+                "-o",
+                str(tmp_path / "out.wav"),
+                "--backend",
+                "phonon",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "not supported by Phonon 40M" in result.output
+        for code in ("de", "en", "es", "fr", "pt"):
+            assert code in result.output
+        engine.create_job.assert_not_called()
+
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_phonon_non_interactive_without_language_errors(
+        self, mock_create: MagicMock, tmp_path: Path
+    ) -> None:
+        epub = tmp_path / "book.epub"
+        epub.write_text("fake")
+        engine = _mock_phonon_engine(mock_create, book_language="unknown")
+
+        result = runner.invoke(
+            app,
+            [
+                "convert",
+                str(epub),
+                "-v",
+                "default",
+                "-o",
+                str(tmp_path / "out.wav"),
+                "--backend",
+                "phonon",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "--language" in result.output
+        engine.create_job.assert_not_called()
+
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_phonon_missing_model_is_fatal(
+        self, mock_create: MagicMock, tmp_path: Path
+    ) -> None:
+        epub = tmp_path / "book.epub"
+        epub.write_text("fake")
+        _mock_phonon_engine(
+            mock_create,
+            caps_error=TTSBackendError(
+                "Could not prepare the Phonon 40M model for language 'es'."
+            ),
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "convert",
+                str(epub),
+                "-v",
+                "default",
+                "-l",
+                "es",
+                "-o",
+                str(tmp_path / "out.wav"),
+                "--backend",
+                "phonon",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "Proceeding anyway" not in result.output
+        assert "Could not prepare" in result.output
+
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_kokoro_keeps_proceeding_anyway(
+        self, mock_create: MagicMock, tmp_path: Path
+    ) -> None:
+        epub = tmp_path / "book.epub"
+        epub.write_text("fake")
+        _mock_phonon_engine(
+            mock_create, caps_error=TTSBackendError("voice list unavailable")
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "convert",
+                str(epub),
+                "-v",
+                "af_heart",
+                "-l",
+                "en",
+                "-o",
+                str(tmp_path / "out.wav"),
+            ],
+        )
+
+        assert "Proceeding anyway" in result.output
+
+
+class TestPhononQueryCommands:
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_list_voices_uses_cached_languages_without_prompt(
+        self, mock_create: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine = _mock_phonon_engine(mock_create)
+        monkeypatch.setattr(
+            "audiobook_engine.infrastructure.tts.phonon.models.list_cached_languages",
+            lambda *args, **kwargs: ["es"],
+        )
+
+        result = runner.invoke(app, ["list-voices", "--backend", "phonon"])
+
+        assert result.exit_code == 0
+        assert mock_create.call_args[1]["backend"] == "phonon"
+        assert mock_create.call_args[1]["language"] is None
+        engine.capabilities.assert_called()
+
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_capabilities_with_explicit_language(self, mock_create: MagicMock) -> None:
+        _mock_phonon_engine(mock_create)
+
+        result = runner.invoke(
+            app, ["capabilities", "--backend", "phonom", "-l", "es-ES"]
+        )
+
+        assert result.exit_code == 0
+        assert mock_create.call_args[1]["backend"] == "phonon"
+        assert mock_create.call_args[1]["language"] == "es"
+
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_capabilities_non_interactive_without_cache_errors(
+        self, mock_create: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _mock_phonon_engine(mock_create)
+        monkeypatch.setattr(
+            "audiobook_engine.infrastructure.tts.phonon.models.list_cached_languages",
+            lambda *args, **kwargs: [],
+        )
+
+        result = runner.invoke(app, ["capabilities", "--backend", "phonon"])
+
+        assert result.exit_code == 1
+        assert "--language" in result.output
+
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_interactive_prompt_selects_language(
+        self,
+        mock_create: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_phonon_engine(mock_create)
+        monkeypatch.setattr(
+            "audiobook_engine.infrastructure.tts.phonon.models.list_cached_languages",
+            lambda *args, **kwargs: [],
+        )
+        monkeypatch.setattr(
+            "audiobook_engine.interfaces.cli.main.sys",
+            _SysProxy(sys, SimpleNamespace(isatty=lambda: True)),
+        )
+        monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: "es")
+
+        result = runner.invoke(app, ["list-voices", "--backend", "phonon"])
+
+        assert result.exit_code == 0
+        assert mock_create.call_args[1]["language"] == "es"
+
+    def test_unknown_backend_rejected(self, tmp_path: Path) -> None:
+        epub = tmp_path / "book.epub"
+        epub.write_text("fake")
+
+        result = runner.invoke(
+            app, ["convert", str(epub), "-v", "default", "--backend", "piper"]
+        )
+
+        assert result.exit_code == 1
+        assert "Unknown TTS backend" in result.output
+
+
+def _resume_engine_mock(mock_create: MagicMock) -> MagicMock:
+    """Engine mock whose first get_job misses memory (forces a disk load)."""
+    from audiobook_engine.domain.exceptions import JobError
+
+    engine: MagicMock = mock_create.return_value
+    done = MagicMock()
+    done.state = JobState.COMPLETED
+    done.completed_segments = 1
+    done.total_segments = 1
+
+    calls = {"count": 0}
+
+    def _get_job(_job_id: str) -> MagicMock:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise JobError("not in memory")
+        return done
+
+    engine.get_job.side_effect = _get_job
+    return engine
+
+
+class TestResumeBackendSelection:
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_resume_uses_recorded_backend(
+        self, mock_create: MagicMock, tmp_path: Path
+    ) -> None:
+        from audiobook_engine.domain.job import AudiobookJob
+        from audiobook_engine.infrastructure.persistence.job_store import (
+            save_job,
+        )
+
+        job_dir = tmp_path / "jobs" / "jobpho"
+        job = AudiobookJob(
+            id="jobpho",
+            state=JobState.SYNTHESIZING,
+            backend="phonon",
+            language="es",
+            voice="default",
+            work_dir=job_dir,
+            total_segments=1,
+            completed_segments=0,
+        )
+        save_job(job, job_dir)
+
+        _resume_engine_mock(mock_create)
+
+        result = runner.invoke(app, ["resume", "jobpho", "--work-dir", str(tmp_path)])
+
+        assert result.exit_code == 0
+        assert mock_create.call_args[1]["backend"] == "phonon"
+        assert mock_create.call_args[1]["language"] == "es"
+
+    @patch("audiobook_engine.interfaces.cli.main._create_engine")
+    def test_resume_historical_job_defaults_to_kokoro(
+        self, mock_create: MagicMock, tmp_path: Path
+    ) -> None:
+        from audiobook_engine.domain.job import AudiobookJob
+        from audiobook_engine.infrastructure.persistence.job_store import (
+            save_job,
+        )
+
+        job_dir = tmp_path / "jobs" / "jobold"
+        job = AudiobookJob(
+            id="jobold",
+            state=JobState.SYNTHESIZING,
+            work_dir=job_dir,
+            total_segments=1,
+        )
+        save_job(job, job_dir)
+        original = (job_dir / "job.json").read_text()
+
+        _resume_engine_mock(mock_create)
+
+        result = runner.invoke(app, ["resume", "jobold", "--work-dir", str(tmp_path)])
+
+        assert result.exit_code == 0
+        assert mock_create.call_args[1]["backend"] == "kokoro"
+        # Historical job records are never rewritten (Principle III).
+        assert (job_dir / "job.json").read_text() == original

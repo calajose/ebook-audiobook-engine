@@ -9,8 +9,8 @@ Instructions for future OpenCode sessions (and human contributors) working in
 2. **Domain isolation:** `domain/` must never import `infrastructure/`, `application/`,
    `interfaces/`, or third-party libraries.
    - The third-party part is auto-checked by `tests/domain/test_no_forbidden_imports.py`
-     (textual scan for `kokoro`, `ffmpeg`, `fastapi`, `uvicorn`, `requests`, `onnxruntime`,
-     `openvino`, `httpx`, `starlette`, `calibre`).
+     (textual scan for `kokoro`, `ptts`, `ffmpeg`, `fastapi`, `uvicorn`, `requests`,
+     `onnxruntime`, `openvino`, `httpx`, `starlette`, `calibre`).
    - Internal layering (`domain` → `audiobook_engine.infrastructure`) is **not** checked by
      any test — enforce it manually.
 
@@ -20,20 +20,21 @@ No CI, Makefile, or lockfile exists — the local venv is the source of truth.
 The package is installed editable in `.venv/`:
 
 ```bash
-./.venv/bin/pytest                 # full suite: 347 tests, ~2s, fully mocked
+./.venv/bin/pytest                 # full suite: 419 tests, ~2s, fully mocked
 ./.venv/bin/ruff check src tests   # scope matters — see below
 ./.venv/bin/mypy src tests
 ./.venv/bin/audiobook-engine --help  # CLI console script
 ```
 
 - Single test: `./.venv/bin/pytest tests/domain/test_job.py::test_some_name`
-- Tests need **no** network, FFmpeg, GPU, or Kokoro models (both are mocked).
+- Tests need **no** network, FFmpeg, GPU, Kokoro models or the `ptts` runtime
+  (all are mocked/faked).
 - **Don't run `ruff check .`**: it also lints `scripts/experiments/` (scratch scripts) and
   `.specify/` (spec-kit tooling), which are not lint-clean.
 - **Don't run `ruff format .` repo-wide**: ~30 of 65 files under `src`/`tests` are
   unformatted — it would create a huge unrelated diff. Format only files you touch.
-- Known pre-existing baseline at v0.6.0 (not caused by your change): 1 ruff E501 in
-  `mobi_parser.py`, 2 mypy errors in `job_store.py` and `test_kokoro_backend.py`.
+- Verification baseline at v0.8.0: `pytest` (419 tests), `ruff check src tests` and
+  `mypy src tests` are all clean.
 
 ## Architecture
 
@@ -44,6 +45,8 @@ src/audiobook_engine/
 ├── infrastructure/
 │   ├── ebook/          # epub/mobi/txt parsers, normalizer.py, chunker.py
 │   ├── tts/kokoro/     # backend.py (synthesis), models.py (auto-downloader)
+│   ├── tts/phonon/     # backend.py (ptts synthesis), models.py (per-language cache
+│   │                   #   + first-use download + manual instructions)
 │   ├── device.py       # CUDA / OpenVINO / CPU provider resolution
 │   ├── audio/          # silence, wav_merger, ffmpeg, m4b_assembler
 │   ├── metadata/       # (empty placeholder)
@@ -77,6 +80,15 @@ src/audiobook_engine/
 - Kokoro backend: speed clamped to `0.5–2.0`; ~80ms zero tail pad after synthesis to protect
   rising intonation on short questions. `normalize_dialogue()` converts `- `/`– ` to em-dash
   and guillemets/curly quotes to straight quotes before phonemization.
+- Phonon 40M backend: `--backend phonon` (alias `phonom`, `-b`), `kokoro` stays the
+  default. One checkpoint per language (`de`, `en`, `es`, `fr`, `pt`) under
+  `<user cache>/ebook-audiobook-engine/phonon/phonon-40m-<lang>/`; regional tags fold to the
+  base language. Speed keeps the same `0.5–2.0` contract (mapped to `duration_delta`) and the
+  same ~80 ms acoustic tail, so prosody and chapter marks are backend-agnostic. Language
+  resolution lives in the CLI: explicit `--language` → ebook metadata → interactive prompt;
+  non-interactive sessions raise instead of blocking. The chosen backend is persisted in
+  `job.json` (`backend` field, already present); `resume` re-instantiates it, and records
+  without the field are read as `kokoro` and never rewritten.
 - Chunker: `DEFAULT_MAX_CHARS = 500`, sentence-boundary aware; lowercase dialogue tags
   (`—preguntó ella`) stay attached to the preceding quote. The job's persisted `max_chars`
   drives real synthesis, so `inspect --max-chars` and `convert --max-chars` agree (`job.json`
@@ -102,6 +114,13 @@ src/audiobook_engine/
 - First real synthesis downloads ~354 MB of Kokoro ONNX models to
   `~/.cache/ebook-audiobook-engine/kokoro/` (tests never do this).
 - `[cuda]` and `[openvino]` extras are mutually exclusive — install only one per env.
+- Phonon 40M needs the optional `[phonon]` extra (`ptts`) and, on first use, ~75 MB per
+  language from Hugging Face. Those repos are **gated**: accept the license and provide
+  `HF_TOKEN` (or `hf auth login`). Without it the CLI prints the model URL, the required
+  files and the exact local directory for a manual install — never a traceback. Tests never
+  download anything and fake `ptts` via `sys.modules`.
+- `--device openvino` is Kokoro-only; with `--backend phonon` it fails loudly (no silent
+  fallback), consistent with the "forced device never degrades" rule.
 - FFmpeg is optional: required only for M4B output (WAV fallback otherwise).
 
 ## Docs & other instruction sources

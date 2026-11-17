@@ -8,7 +8,7 @@ import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import ebooklib  # type: ignore[import-untyped]
+import ebooklib
 import mobi  # type: ignore[import-untyped]
 from ebooklib import epub
 
@@ -151,7 +151,12 @@ class MOBIParser:
             if item is None:
                 continue
 
-            content = item.get_content().decode("utf-8", errors="replace")
+            raw_content = item.get_content()
+            content = (
+                raw_content.decode("utf-8", errors="replace")
+                if isinstance(raw_content, bytes)
+                else raw_content
+            )
             heading = self._extract_heading(content)
             segments, seg_index = self._extract_segments(content, seg_index)
 

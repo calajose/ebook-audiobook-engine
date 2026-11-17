@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ebooklib import epub  # type: ignore[import-untyped]
+from ebooklib import epub
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -38,15 +38,8 @@ def build_epub(
         item_id = f"chapter_{idx}"
         file_name = f"chapter_{idx}.xhtml"
 
-        paragraphs = "".join(
-            f"<p>{p}</p>" for p in body.split("\n") if p.strip()
-        )
-        content = (
-            f"<html><body>"
-            f"<h1>{heading}</h1>"
-            f"{paragraphs}"
-            f"</body></html>"
-        )
+        paragraphs = "".join(f"<p>{p}</p>" for p in body.split("\n") if p.strip())
+        content = f"<html><body><h1>{heading}</h1>{paragraphs}</body></html>"
 
         chapter = epub.EpubHtml(
             title=heading,

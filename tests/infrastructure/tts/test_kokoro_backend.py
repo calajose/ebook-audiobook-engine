@@ -309,7 +309,7 @@ class TestKokoroBackendDevice:
 
         call_count = 0
 
-        def _mock_session(*args, **kwargs):
+        def _mock_session(*args: object, **kwargs: object) -> MagicMock:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
