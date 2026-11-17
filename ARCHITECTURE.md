@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`ebook-audiobook-engine` is an independent, reusable local audiobook-conversion engine. It converts supported ebooks into audiobooks through pluggable TTS backends; Kokoro is the first backend.
+`ebook-audiobook-engine` is an independent, reusable local audiobook-conversion engine. It converts supported ebooks into audiobooks through pluggable TTS backends: Kokoro (default) and Phonon 40M.
 
 It has **no dependency on Calibre** and supports two first-class modes:
 
@@ -60,7 +60,8 @@ ebook-audiobook-engine/
 │       ├── infrastructure/
 │       │   ├── ebook/
 │       │   ├── tts/
-│       │   │   └── kokoro/
+│       │   │   ├── kokoro/
+│       │   │   └── phonon/
 │       │   ├── audio/
 │       │   ├── metadata/
 │       │   └── persistence/
@@ -74,7 +75,7 @@ ebook-audiobook-engine/
 
 ### Domain
 
-Contains `Book`, `Chapter`, `TextSegment`, `Language`, `Voice`, `BackendCapabilities`, `AudiobookJob` and the `EbookParser`/`TTSBackend` contracts. It must not import Kokoro, FFmpeg, HTTP frameworks or Calibre.
+Contains `Book`, `Chapter`, `TextSegment`, `Language`, `Voice`, `BackendCapabilities`, `AudiobookJob` and the `EbookParser`/`TTSBackend` contracts. It must not import Kokoro, ptts (Phonon), FFmpeg, HTTP frameworks or Calibre.
 
 ### Application
 
@@ -82,7 +83,7 @@ Coordinates inspect, capabilities, create job, run, resume, cancel, status and a
 
 ### Infrastructure
 
-Provides EPUB/AZW3 parsers, Kokoro, persistence, audio handling, FFmpeg/M4B assembly and metadata.
+Provides EPUB/AZW3 parsers, the Kokoro and Phonon 40M TTS adapters, persistence, audio handling, FFmpeg/M4B assembly and metadata.
 
 ### Interfaces
 
@@ -121,7 +122,17 @@ Language and voice combinations are discovered from backend capabilities; they a
 
 ## Kokoro backend
 
-Kokoro is the first concrete backend. Only its infrastructure adapter imports Kokoro-specific packages. It loads the model/tokenizer, exposes capabilities, synthesizes WAV and maps backend errors to engine errors.
+Kokoro is the default concrete backend. Only its infrastructure adapter imports Kokoro-specific packages. It loads the model/tokenizer, exposes capabilities, synthesizes WAV and maps backend errors to engine errors.
+
+## Phonon 40M backend
+
+Phonon 40M (Gradium) is the second concrete backend, selected with `--backend phonon` (alias `phonom`). Only its infrastructure adapter imports the `ptts` runtime, shipped as the optional `[phonon]` extra; `domain/` never sees it.
+
+- **One checkpoint per language** (`de`, `en`, `es`, `fr`, `pt`), cached in `<user cache>/ebook-audiobook-engine/phonon/phonon-40m-<lang>/` with `config.json`, `tokenizer.json`, a weight file (`model.q8.gguf` or `model.safetensors`) and optionally `default-voice.safetensors` / `voices/`.
+- **First-use download** from `gradium/phonon-40m-<lang>`. Those repositories are gated, so a token (`HF_TOKEN` or `hf auth login`) is required. When the download cannot run or the local directory is incomplete, the adapter raises a `TTSBackendError` whose message carries the model URL, the required files and the exact absolute target directory.
+- **Language resolution** happens in the CLI (explicit `--language`, then ebook metadata, then an interactive prompt; non-interactive sessions fail instead of blocking). The backend itself normalizes regional tags and rejects unsupported languages.
+- **Prosody is unchanged**: the adapter validates `speed` in `[0.5, 2.0]`, maps it to Phonon's `duration_delta`, appends the same 80 ms acoustic tail and writes a WAV, so silence injection, chapter marks and `.m4b`/`.wav` assembly are backend-agnostic.
+- **Resume** re-instantiates the backend recorded in `job.json`; historical records without the field are read as `kokoro` and never rewritten.
 
 ## Processing pipeline
 
@@ -199,7 +210,7 @@ Support backend, model path, work/output directories, default language/voice, FF
 Unit tests cover domain, capabilities, normalization, chunking and state transitions. Integration tests cover EPUB, Kokoro, WAV, FFmpeg, metadata and persistence. An end-to-end test must perform:
 
 ```text
-EPUB -> Book -> Chapters -> Segments -> Kokoro -> WAV -> M4B
+EPUB -> Book -> Chapters -> Segments -> TTS backend (Kokoro | Phonon 40M) -> WAV -> M4B
 ```
 
 ## Architectural decision

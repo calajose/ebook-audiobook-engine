@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import logging
 import shutil
+import sys
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import typer
 from rich.console import Console
@@ -52,6 +53,38 @@ app = typer.Typer(
 )
 console = Console()
 
+#: Canonical TTS backend names.
+_SUPPORTED_BACKENDS = ("kokoro", "phonon")
+
+#: Accepted spellings for each canonical backend name.
+_BACKEND_ALIASES: dict[str, str] = {
+    "kokoro": "kokoro",
+    "phonon": "phonon",
+    "phonom": "phonon",
+    "phonon-40m": "phonon",
+    "phonom-40m": "phonon",
+}
+
+#: Languages Phonon 40M ships a checkpoint for.
+_PHONON_LANGUAGES = ("de", "en", "es", "fr", "pt")
+
+
+def normalize_backend_name(backend: str) -> str:
+    """Normalize a user-provided backend name to its canonical form.
+
+    Accepts ``kokoro`` and ``phonon`` plus the ``phonom``, ``phonon-40m``
+    and ``phonom-40m`` spellings of the Phonon 40M engine.
+    """
+    normalized = (backend or "").strip().lower()
+    canonical = _BACKEND_ALIASES.get(normalized)
+    if canonical is None:
+        supported = ", ".join(_SUPPORTED_BACKENDS)
+        raise TTSBackendError(
+            f"Unknown TTS backend '{backend}'. "
+            f"Supported backends: {supported} (alias: phonom)."
+        )
+    return canonical
+
 
 def _setup_logging(verbose: bool) -> None:
     """Configure logging with rich handler."""
@@ -83,16 +116,95 @@ def _create_engine(
     work_dir: str | None,
     source: Path | None = None,
     device: str = "auto",
+    backend: str = "kokoro",
+    language: str | None = None,
 ) -> AudiobookEngine:
     """Create an AudiobookEngine with appropriate parser and TTS backend."""
     from audiobook_engine.infrastructure.tts.kokoro.backend import (
         KokoroBackend,
     )
 
+    backend_name = normalize_backend_name(backend)
     parser = _get_parser(source) if source else EPUBParser()
-    tts = KokoroBackend(device=device)
+
+    tts: object
+    if backend_name == "phonon":
+        from audiobook_engine.infrastructure.tts.phonon.backend import (
+            PhononBackend,
+        )
+
+        tts = PhononBackend(language=language, device=device)
+    else:
+        tts = KokoroBackend(device=device)
+
     work = Path(work_dir) if work_dir else Path("work")
     return AudiobookEngine(parser, tts, work_dir=work)
+
+
+def _was_explicitly_given(ctx: Any, name: str) -> bool:
+    """Return True when the option ``name`` came from the command line.
+
+    Typer may vendor its own Click copy, so the returned parameter source
+    can belong to a different ``ParameterSource`` class than the one
+    importable from the ``click`` package. Comparing the enum member name
+    keeps this working across Click/Typer versions.
+    """
+    source = ctx.get_parameter_source(name)
+    if source is None:
+        return False
+    return getattr(source, "name", str(source)) in ("COMMANDLINE", "ENVIRONMENT")
+
+
+def _prompt_or_resolve_phonon_language(
+    explicit_lang: str | None,
+    inferred_lang: str | None = None,
+    cache_dir: Path | None = None,
+    require_single: bool = True,
+) -> str | None:
+    """Resolve which Phonon 40M language checkpoint to use.
+
+    Resolution order: an explicit ``--language`` value, a language inferred
+    from the book metadata, the checkpoints already cached locally (when
+    ``require_single`` is False), or an interactive prompt. In a
+    non-interactive session the command fails with instructions instead of
+    blocking on input.
+    """
+    from audiobook_engine.infrastructure.tts.phonon.models import (
+        list_cached_languages,
+        normalize_phonon_language,
+        try_normalize_phonon_language,
+    )
+
+    if explicit_lang:
+        return normalize_phonon_language(explicit_lang)
+
+    if inferred_lang:
+        normalized = try_normalize_phonon_language(inferred_lang)
+        if normalized is not None:
+            console.print(
+                f"[bold]Language:[/bold] {normalized} (inferred from the book metadata)"
+            )
+            return normalized
+
+    if not require_single and list_cached_languages(cache_dir):
+        return None
+
+    if not sys.stdin.isatty():
+        choices = ", ".join(_PHONON_LANGUAGES)
+        raise TTSBackendError(
+            "Phonon 40M needs a language, and this session is not "
+            f"interactive. Pass --language <{choices}> and re-run the "
+            "command, or place the model files in the Phonon cache "
+            "directory printed by the manual download instructions."
+        )
+
+    choices = ", ".join(_PHONON_LANGUAGES)
+    answer = typer.prompt(
+        "Phonon 40M models are language-specific "
+        f"({choices}).\nWhich language model do you want to use/download",
+        default="en",
+    )
+    return normalize_phonon_language(answer)
 
 
 def _display_progress(
@@ -151,6 +263,7 @@ def _display_progress(
 
 @app.command()
 def convert(
+    ctx: typer.Context,
     book: str = typer.Argument(..., help="Path to the ebook file."),
     output: str = typer.Option(
         "output.m4b", "--output", "-o", help="Output audiobook path."
@@ -159,6 +272,12 @@ def convert(
         "en", "--language", "-l", help="Target language code."
     ),
     voice: str = typer.Option(..., "--voice", "-v", help="Voice identifier."),
+    backend: str = typer.Option(
+        "kokoro",
+        "--backend",
+        "-b",
+        help="TTS backend: kokoro, phonon (alias: phonom).",
+    ),
     speed: float = typer.Option(
         1.0, "--speed", "-s", help="Speech speed multiplier (0.5 to 2.0)."
     ),
@@ -220,7 +339,29 @@ def convert(
         raise typer.Exit(1)
 
     try:
-        engine = _create_engine(work_dir, source, device=device)
+        backend_name = normalize_backend_name(backend)
+    except TTSBackendError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from None
+
+    explicit_language = _was_explicitly_given(ctx, "language")
+
+    initial_language: str | None = None
+    if backend_name == "phonon" and explicit_language:
+        try:
+            initial_language = _prompt_or_resolve_phonon_language(language)
+        except TTSBackendError as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(1) from None
+
+    try:
+        engine = _create_engine(
+            work_dir,
+            source,
+            device=device,
+            backend=backend_name,
+            language=initial_language,
+        )
     except (EbookError, TTSBackendError) as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from None
@@ -236,6 +377,30 @@ def convert(
 
     console.print(f"[bold]Book:[/bold] {book_data.title} by {book_data.author}")
     console.print(f"[bold]Chapters:[/bold] {len(book_data.chapters)}")
+
+    if backend_name == "phonon":
+        try:
+            resolved_language = _prompt_or_resolve_phonon_language(
+                language if explicit_language else None,
+                inferred_lang=None if explicit_language else book_data.language,
+            )
+        except TTSBackendError as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(1) from None
+        if resolved_language is not None and resolved_language != initial_language:
+            try:
+                engine = _create_engine(
+                    work_dir,
+                    source,
+                    device=device,
+                    backend=backend_name,
+                    language=resolved_language,
+                )
+            except (EbookError, TTSBackendError) as exc:
+                console.print(f"[red]Error:[/red] {exc}")
+                raise typer.Exit(1) from None
+        if resolved_language is not None:
+            language = resolved_language
 
     try:
         chapter_indices = _parse_chapter_indices(chapters) if chapters else None
@@ -307,16 +472,17 @@ def convert(
         with console.status("[bold green]Validating voice..."):
             caps = engine.capabilities()
 
-            # Auto-detect language from voice ID
-            detected_lang = _voice_to_language(voice)
-            if detected_lang and detected_lang != language:
-                console.print(
-                    f"[yellow]Voice '{voice}' uses {detected_lang}, "
-                    f"overriding --language {language}[/yellow]"
-                )
-                language = detected_lang
-                # Update job with corrected language
-                job.language = language
+            if backend_name == "kokoro":
+                # Auto-detect language from voice ID (Kokoro voice prefix)
+                detected_lang = _voice_to_language(voice)
+                if detected_lang and detected_lang != language:
+                    console.print(
+                        f"[yellow]Voice '{voice}' uses {detected_lang}, "
+                        f"overriding --language {language}[/yellow]"
+                    )
+                    language = detected_lang
+                    # Update job with corrected language
+                    job.language = language
 
             valid_voice = any(
                 v.id == voice for v in caps.voices if v.language_code == language
@@ -336,6 +502,10 @@ def convert(
                     )
                     raise typer.Exit(1)
     except TTSBackendError as exc:
+        if backend_name == "phonon":
+            # A missing model is fatal: never start a job that cannot speak.
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(1) from None
         console.print(f"[yellow]Warning:[/yellow] {exc}")
         console.print("[yellow]Proceeding anyway...[/yellow]")
 
@@ -390,12 +560,40 @@ def capabilities(
         "-d",
         help="Compute device: auto, cpu, cuda, openvino.",
     ),
+    backend: str = typer.Option(
+        "kokoro",
+        "--backend",
+        "-b",
+        help="TTS backend: kokoro, phonon (alias: phonom).",
+    ),
+    language: str | None = typer.Option(
+        None,
+        "--language",
+        "-l",
+        help="Language code (required to pick a Phonon 40M checkpoint).",
+    ),
     work_dir: str | None = typer.Option(
         None, "--work-dir", "-w", help="Working directory."
     ),
 ) -> None:
     """Display supported languages and voice counts."""
-    engine = _create_engine(work_dir, device=device)
+    try:
+        backend_name = normalize_backend_name(backend)
+        resolved_language: str | None = None
+        if backend_name == "phonon":
+            resolved_language = _prompt_or_resolve_phonon_language(
+                language, require_single=False
+            )
+        engine = _create_engine(
+            work_dir,
+            device=device,
+            backend=backend_name,
+            language=resolved_language,
+        )
+    except TTSBackendError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from None
+
     try:
         caps = engine.capabilities()
         langs = ", ".join(lang.code for lang in caps.languages)
@@ -669,12 +867,33 @@ def list_voices(
         "-d",
         help="Compute device: auto, cpu, cuda, openvino.",
     ),
+    backend: str = typer.Option(
+        "kokoro",
+        "--backend",
+        "-b",
+        help="TTS backend: kokoro, phonon (alias: phonom).",
+    ),
     work_dir: str | None = typer.Option(
         None, "--work-dir", "-w", help="Working directory."
     ),
 ) -> None:
     """List available voices and languages."""
-    engine = _create_engine(work_dir, device=device)
+    try:
+        backend_name = normalize_backend_name(backend)
+        resolved_language: str | None = None
+        if backend_name == "phonon":
+            resolved_language = _prompt_or_resolve_phonon_language(
+                language, require_single=False
+            )
+        engine = _create_engine(
+            work_dir,
+            device=device,
+            backend=backend_name,
+            language=resolved_language,
+        )
+    except TTSBackendError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from None
 
     try:
         caps = engine.capabilities()
@@ -781,14 +1000,42 @@ def resume(
             console.print(f"[red]Error:[/red] Job not found: {job_id}")
             raise typer.Exit(1) from None
         job = load_job(work)
-        # Re-create engine with correct parser for source format
-        if job.source_path is not None:
-            engine = _create_engine(work_dir, job.source_path)
+        # Re-create engine with the parser for the source format and the
+        # TTS backend recorded in the job (historical jobs -> kokoro).
+        effective_backend = job.backend or "kokoro"
+        try:
+            engine = _create_engine(
+                work_dir,
+                job.source_path,
+                backend=effective_backend,
+                language=job.language or None,
+            )
+        except TTSBackendError as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(1) from None
         engine._jobs[job.id] = job
         if job.source_path is not None:
             engine._books[job.id] = engine.inspect(job.source_path)
 
     job.keep_intermediates = keep_intermediates
+
+    # Ensure the engine speaks with the backend recorded in the job.
+    recorded_backend = job.backend or "kokoro"
+    current_backend = getattr(engine._tts, "name", "kokoro")
+    if isinstance(current_backend, str) and current_backend != recorded_backend:
+        try:
+            engine = _create_engine(
+                work_dir,
+                job.source_path,
+                backend=recorded_backend,
+                language=job.language or None,
+            )
+            engine._jobs[job.id] = job
+            if job.source_path is not None:
+                engine._books[job.id] = engine.inspect(job.source_path)
+        except TTSBackendError as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(1) from None
 
     if not job.can_resume():
         console.print(

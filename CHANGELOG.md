@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Phonon 40M TTS backend** (Gradium), selectable with `--backend phonon` (alias `--backend phonom`, short flag `-b`) on `convert`, `list-voices` and `capabilities`. `kokoro` remains the default backend.
+  - New optional extra `[phonon]`: `pip install ebook-audiobook-engine[phonon]` installs the official `ptts` runtime (Rust inference stack with Python bindings, no PyTorch).
+  - Five language checkpoints (`de`, `en`, `es`, `fr`, `pt`), one per language, cached in `~/.cache/ebook-audiobook-engine/phonon/phonon-40m-<lang>/`. Regional tags (`en-US`, `es-ES`, `pt-BR`) are folded to their base language; unsupported languages are rejected with the supported list.
+  - First-use download from `gradium/phonon-40m-<lang>` on Hugging Face. Because those repositories are gated, the download needs the model license accepted plus `HF_TOKEN` or `hf auth login`.
+  - When the download cannot run (no token, license not accepted, no network) or the local directory is incomplete, the CLI prints step-by-step instructions with the model URL, the required files and the exact local directory to place them in. A complete local checkpoint is used with no network access.
+  - Language resolution in `convert`: explicit `--language`, then the ebook metadata, then an interactive prompt; non-interactive sessions fail with a clear message instead of blocking. `list-voices` and `capabilities` accept `--language` and, without it, report the checkpoints already cached (prompting only when none exists).
+  - `--speed` keeps the `[0.5, 2.0]` contract (translated to Phonon's `duration_delta`) and the 80 ms acoustic tail is preserved, so prosody, chapter marks and `.m4b`/`.wav` output are unchanged.
+  - The selected backend is persisted in `job.json`; `resume` re-instantiates the recorded engine. Jobs created before this release are read as `kokoro` and their records are never rewritten.
+
+### Fixed
+- `mypy` is clean again after the dependency refresh: `ebooklib` now ships type information, so stale `type: ignore` comments were removed and `str | bytes` item payloads are normalized in the cover/EPUB/MOBI readers and the job store. No behavior change.
+
+---
+
 ## [0.7.0] - 2026-11-10
 
 ### Fixed
