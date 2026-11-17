@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.8.0] - 2026-11-17
 
 ### Added
 - **Phonon 40M TTS backend** (Gradium), selectable with `--backend phonon` (alias `--backend phonom`, short flag `-b`) on `convert`, `list-voices` and `capabilities`. `kokoro` remains the default backend.
