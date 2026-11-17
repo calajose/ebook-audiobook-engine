@@ -640,7 +640,7 @@ class TestDeterminism:
 class TestSharedCoverParity:
     def test_epub_cover_wrapper_unwrapped_via_mobi_parser(self, tmp_path: Path) -> None:
         """MOBI/AZW3 path uses the shared cover logic (same XHTML handling)."""
-        from ebooklib import epub  # type: ignore[import-untyped]
+        from ebooklib import epub
 
         from audiobook_engine.infrastructure.ebook.mobi_parser import (
             MOBIParser,

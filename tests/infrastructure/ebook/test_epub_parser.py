@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from ebooklib import epub  # type: ignore[import-untyped]
+from ebooklib import epub
 from tests.fixtures.epub_builder import build_epub
 
 from audiobook_engine.domain.exceptions import EbookError

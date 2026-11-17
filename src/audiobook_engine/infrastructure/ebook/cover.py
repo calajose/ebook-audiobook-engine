@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import ebooklib  # type: ignore[import-untyped]
+import ebooklib
 from ebooklib import epub
 
 if TYPE_CHECKING:
@@ -84,7 +84,7 @@ def extract_cover(book: epub_types.EpubBook, source_path: Path) -> Path | None:
     # 5. First image item in the book
     for item in book.get_items():
         if _is_image_item(item):
-            content = item.get_content()
+            content = _as_bytes(item.get_content())
             if content:
                 suffix = _image_suffix(item) or ".jpg"
                 return _write_cover(source_path, content, suffix)
@@ -108,6 +108,11 @@ def _image_suffix(item: ebooklib.epub.EpubItem) -> str:
     return Path(item.get_name() or "").suffix.lower()
 
 
+def _as_bytes(value: str | bytes) -> bytes:
+    """Normalize an ebook item payload to bytes (it may come back as str)."""
+    return value.encode("utf-8") if isinstance(value, str) else value
+
+
 def _write_cover(source_path: Path, content: bytes, suffix: str) -> Path:
     """Write cover bytes next to the source ebook."""
     out = source_path.parent / f"{source_path.stem}_cover{suffix}"
@@ -128,7 +133,7 @@ def _save_item_as_cover(
     """
     if item is None:
         return None
-    content = item.get_content()
+    content = _as_bytes(item.get_content())
     if not content:
         return None
 
@@ -157,7 +162,7 @@ def _save_item_as_cover(
             continue
         sub_name = (sub_item.get_name() or "").lower()
         if sub_name.endswith(img_filename) or img_filename in sub_name:
-            sub_content = sub_item.get_content()
+            sub_content = _as_bytes(sub_item.get_content())
             if sub_content:
                 return _write_cover(
                     source_path,

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 from audiobook_engine.domain.job import AudiobookJob, JobState
 
@@ -63,7 +64,7 @@ def _deserialize(data: dict[str, object]) -> AudiobookJob:
         total_segments=int(str(data.get("total_segments", 0))),
         completed_segments=int(str(data.get("completed_segments", 0))),
         chapter_indices=(
-            data["chapter_indices"]
+            cast("list[int]", data["chapter_indices"])
             if isinstance(data.get("chapter_indices"), list)
             else None
         ),

@@ -7,7 +7,7 @@ import re
 import zipfile
 from typing import TYPE_CHECKING
 
-import ebooklib  # type: ignore[import-untyped]
+import ebooklib
 from ebooklib import epub
 
 from audiobook_engine.domain.exceptions import EbookError
@@ -117,7 +117,12 @@ class EPUBParser:
             if item is None:
                 continue
 
-            content = item.get_content().decode("utf-8", errors="replace")
+            raw_content = item.get_content()
+            content = (
+                raw_content.decode("utf-8", errors="replace")
+                if isinstance(raw_content, bytes)
+                else raw_content
+            )
             heading = self._extract_heading(content)
             segments, seg_index = self._extract_segments(content, seg_index)
 
